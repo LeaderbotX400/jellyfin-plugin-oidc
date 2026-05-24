@@ -38,6 +38,37 @@ function addLibChip(container, libId) {
     container.appendChild(chip);
 }
 
+// ── Transform rows ────────────────────────────────────────────────────────────
+
+function renderTransformRows(container, transforms) {
+    container.innerHTML = '';
+    (transforms || []).forEach(function (t, i) {
+        var row = document.createElement('div');
+        row.className = 'oidc-transform-row';
+        row.innerHTML =
+            '<input type="text" class="xform-from" placeholder="From (exact)" value="' + esc(t.FromValue || '') + '" />' +
+            '<span style="margin:0 0.3em;">→</span>' +
+            '<input type="text" class="xform-to" placeholder="To (empty=drop)" value="' + esc(t.ToValue || '') + '" />' +
+            '<button type="button" class="oidc-btn-remove" style="padding:0.1em 0.5em;margin-left:0.3em;">&times;</button>';
+        row.querySelector('button').addEventListener('click', function () { row.remove(); });
+        container.appendChild(row);
+    });
+}
+
+function collectTransforms(container) {
+    var rows = container.querySelectorAll('.oidc-transform-row');
+    var result = [];
+    rows.forEach(function (row) {
+        var from = row.querySelector('.xform-from').value.trim();
+        if (from) {
+            result.push({ FromValue: from, ToValue: row.querySelector('.xform-to').value.trim() });
+        }
+    });
+    return result;
+}
+
+// ── Provider cards ────────────────────────────────────────────────────────────
+
 function renderProviders(view) {
     var container = view.querySelector('#providerList');
     container.innerHTML = '';
@@ -59,24 +90,38 @@ function renderProviders(view) {
             fld('Display Name Claim', 'text', 'prov_displayclaim_' + idx, p.DisplayNameClaim || 'name', '') +
             fld('Button Color', 'color', 'prov_color_' + idx, p.ButtonColor || '#4285F4', '') +
             fld('Additional Params', 'text', 'prov_params_' + idx, p.AdditionalParameters || '', 'key=val&key2=val2', true) +
+            fld('Entitlement Claim', 'text', 'prov_entclaim_' + idx, p.EntitlementClaim || 'entitlements', 'Claim for Authentik-style entitlements', true) +
+            fld('Entitlement Prefix', 'text', 'prov_entprefix_' + idx, p.EntitlementPrefix || 'jellyfin:', 'Prefix for Jellyfin entitlements') +
+            '<div class="oidc-field"><label><input type="checkbox" id="prov_entitlements_' + idx + '"' +
+            (p.EnableEntitlements !== false ? ' checked' : '') + '/> Enable Entitlements</label></div>' +
+            '<div class="oidc-field"><label><input type="checkbox" id="prov_emailverified_' + idx + '"' +
+            (p.RequireEmailVerified ? ' checked' : '') + '/> Require email_verified claim</label></div>' +
             '<div class="oidc-field"><label><input type="checkbox" id="prov_enabled_' + idx + '"' +
             (p.Enabled !== false ? ' checked' : '') + '/> Enabled</label></div>' +
             '</div>' +
+            '<details style="margin-top:0.5em;"><summary style="cursor:pointer;color:#aaa;font-size:0.9em;">Role Transforms (' + (p.RoleTransforms || []).length + ')</summary>' +
+            '<div class="oidc-transform-list" id="prov_transforms_' + idx + '" style="margin:0.5em 0;"></div>' +
+            '<button type="button" class="oidc-btn-secondary" style="width:fit-content;font-size:0.85em;" data-action="add-transform" data-idx="' + idx + '">+ Add Transform</button>' +
+            '<p style="font-size:0.8em;color:#aaa;margin:0.2em 0 0;">Map raw IdP role values before matching. Empty "To" drops the value.</p>' +
+            '</details>' +
             '<div style="margin-top:0.5em;display:flex;gap:0.5em;align-items:center;">' +
             '<button type="button" class="oidc-btn-secondary" data-action="test-provider" data-idx="' + idx + '">Test Connection</button>' +
             '<button type="button" class="oidc-btn-remove" data-action="remove-provider" data-idx="' + idx + '">Remove</button>' +
             '<span class="oidc-test-result" data-idx="' + idx + '" style="font-size:0.9em;"></span>' +
             '</div>';
         container.appendChild(card);
+        renderTransformRows(view.querySelector('#prov_transforms_' + idx), p.RoleTransforms);
     });
 }
+
+// ── Role mapping cards ────────────────────────────────────────────────────────
 
 function renderRoleMappings(view) {
     var container = view.querySelector('#roleMappingList');
     container.innerHTML = '';
     cfg.RoleMappings.forEach(function (m, idx) {
         var card = document.createElement('div');
-        card.className = 'oidc-card';
+        card.className = 'oidc-card' + (m.IsExplicitDeny ? ' oidc-card-deny' : '');
         var libOpts = Object.keys(libs).map(function (id) {
             return '<option value="' + esc(id) + '">' + esc(libs[id]) + '</option>';
         }).join('');
@@ -88,11 +133,16 @@ function renderRoleMappings(view) {
                 return f || name;
             })
         );
-        card.innerHTML = '<h4>Role: ' + esc(m.RoleName || 'New Role') + '</h4>' +
+        var denyBadge = m.IsExplicitDeny ? ' <span style="background:#c62828;color:#fff;padding:0 0.4em;border-radius:3px;font-size:0.8em;">DENY</span>' : '';
+        card.innerHTML = '<h4>Role: ' + esc(m.RoleName || 'New Role') + denyBadge + '</h4>' +
             '<div class="oidc-grid">' +
             fld('Role Name', 'text', 'role_name_' + idx, m.RoleName, 'Must match IdP role claim value') +
             fld('Priority', 'number', 'role_priority_' + idx, m.Priority || 0, 'Higher = takes precedence') +
-            fld('Provider Scope', 'text', 'role_provider_' + idx, m.ProviderId || '', 'Leave empty to apply to all providers') +
+            fld('Provider Scope', 'text', 'role_provider_' + idx, m.ProviderId || '', 'Leave empty for all providers') +
+            '</div>' +
+            '<div class="oidc-field" style="margin-bottom:0.5em;">' +
+            '<label><input type="checkbox" id="role_deny_' + idx + '"' + (m.IsExplicitDeny ? ' checked' : '') + ' /> ' +
+            '<strong>Explicit Deny</strong> — strips these permissions after grants are applied</label>' +
             '</div>' +
             '<div class="oidc-checkbox-row">' +
             chk('role_admin_' + idx, 'Administrator', m.IsAdmin) +
@@ -128,6 +178,82 @@ function renderRoleMappings(view) {
     });
 }
 
+// ── SAML provider cards ───────────────────────────────────────────────────────
+
+function renderSamlProviders(view) {
+    var container = view.querySelector('#samlProviderList');
+    if (!container) return;
+    container.innerHTML = '';
+    (cfg.SamlProviders || []).forEach(function (p, idx) {
+        var card = document.createElement('div');
+        card.className = 'oidc-card';
+        card.innerHTML = '<h4>' + esc(p.DisplayName || 'New SAML Provider') +
+            (p.Enabled ? ' <span style="color:#4caf50">&#9679;</span>' : ' <span style="color:#888">&#9679;</span>') +
+            '</h4>' +
+            '<div class="oidc-grid">' +
+            fld('Provider ID', 'text', 'saml_id_' + idx, p.Id, 'Unique identifier') +
+            fld('Display Name', 'text', 'saml_name_' + idx, p.DisplayName, 'Shown on login button') +
+            fld('Entity ID (SP)', 'text', 'saml_entity_' + idx, p.EntityId, 'https://jellyfin.example.com', true) +
+            fld('IdP SSO URL', 'text', 'saml_sso_' + idx, p.SsoUrl, 'https://idp.example.com/sso/saml', true) +
+            fld('Username Claim', 'text', 'saml_user_' + idx, p.UsernameClaim || 'NameID', 'NameID or attribute name') +
+            fld('Role Claim', 'text', 'saml_role_' + idx, p.RoleClaim || 'groups', 'Attribute name for groups/roles') +
+            fld('Button Color', 'color', 'saml_color_' + idx, p.ButtonColor || '#4285F4', '') +
+            '<div class="oidc-field"><label><input type="checkbox" id="saml_enabled_' + idx + '"' +
+            (p.Enabled !== false ? ' checked' : '') + '/> Enabled</label></div>' +
+            '</div>' +
+            '<div class="oidc-field full" style="margin-top:0.5em;">' +
+            '<label>IdP Signing Certificate (PEM or base64 DER)</label>' +
+            '<textarea id="saml_cert_' + idx + '" rows="4" style="width:100%;font-family:monospace;font-size:0.85em;" placeholder="-----BEGIN CERTIFICATE-----&#10;...&#10;-----END CERTIFICATE-----">' +
+            esc(p.IdpCertificate || '') + '</textarea>' +
+            '</div>' +
+            '<div style="margin-top:0.5em;">' +
+            '<button type="button" class="oidc-btn-remove" data-action="remove-saml" data-idx="' + idx + '">Remove</button>' +
+            '</div>';
+        container.appendChild(card);
+    });
+}
+
+// ── Preview panel ─────────────────────────────────────────────────────────────
+
+function runPreview(view) {
+    var providerId = gval(view, 'previewProvider');
+    var roles = gval(view, 'previewRoles');
+    var entitlements = gval(view, 'previewEntitlements');
+    var resultEl = view.querySelector('#previewResult');
+    resultEl.textContent = 'Loading...';
+
+    var params = new URLSearchParams();
+    if (providerId) params.set('providerId', providerId);
+    if (roles) params.set('roles', roles);
+    if (entitlements) params.set('entitlements', entitlements);
+
+    ApiClient.ajax({
+        type: 'GET',
+        url: ApiClient.getUrl('sso/OIDC/Config/PreviewPermissions?' + params.toString()),
+        dataType: 'json'
+    }).then(function (result) {
+        var lines = [
+            'Admin: ' + result.isAdmin,
+            'Playback: ' + result.enableMediaPlayback,
+            'Remote: ' + result.enableRemoteAccess,
+            'Transcoding: ' + result.enableTranscoding,
+            'Live TV: ' + result.enableLiveTv + (result.enableLiveTvManagement ? ' (manage)' : ''),
+            'Download: ' + result.enableDownload,
+            'SyncPlay: ' + (result.enableSyncplayGroupCreation ? 'host' : result.enableSyncplay ? 'join' : 'none'),
+            'Libraries: ' + (result.enableAllLibraries ? 'ALL' : (result.libraries && result.libraries.length ? result.libraries.join(', ') : 'none')),
+            'Max Rating: ' + (result.maxParentalRating != null ? result.maxParentalRating : 'unrestricted'),
+            '',
+            'Matched grants: ' + (result.matchedGrantMappings || []).join(', ') || '(none)',
+            'Matched denies: ' + (result.matchedDenyMappings || []).join(', ') || '(none)',
+        ];
+        resultEl.textContent = lines.join('\n');
+    }).catch(function (err) {
+        resultEl.textContent = 'Error: ' + ((err && err.statusText) || err.message || 'unknown');
+    });
+}
+
+// ── Provider test ─────────────────────────────────────────────────────────────
+
 function testProvider(view, idx) {
     var authority = gval(view, 'prov_authority_' + idx);
     var scopes = gval(view, 'prov_scopes_' + idx);
@@ -150,32 +276,21 @@ function testProvider(view, idx) {
                 resultEl.style.color = '#4caf50';
                 var msg = 'OK — issuer ' + result.Issuer;
                 if (result.UnsupportedRequestedScopes && result.UnsupportedRequestedScopes.length > 0) {
-                    msg += ' (warning: scopes not advertised: ' + result.UnsupportedRequestedScopes.join(', ') + ')';
+                    msg += ' (unsupported scopes: ' + result.UnsupportedRequestedScopes.join(', ') + ')';
                     resultEl.style.color = '#ff9800';
                 }
                 resultEl.textContent = msg;
             }
-            Dashboard.alert({
-                title: 'Provider OK',
-                message:
-                    'Issuer: ' + result.Issuer + '\n' +
-                    'Authorize: ' + result.AuthorizationEndpoint + '\n' +
-                    'Token: ' + result.TokenEndpoint + '\n' +
-                    (result.UserInfoEndpoint ? 'UserInfo: ' + result.UserInfoEndpoint + '\n' : '') +
-                    (result.UnsupportedRequestedScopes && result.UnsupportedRequestedScopes.length > 0
-                        ? '\nWarning: these requested scopes are not in scopes_supported:\n  ' + result.UnsupportedRequestedScopes.join(', ')
-                        : '')
-            });
         } else {
             if (resultEl) { resultEl.style.color = '#c62828'; resultEl.textContent = 'Failed: ' + result.Error; }
-            Dashboard.alert({ title: 'Provider test failed', message: result.Error || 'Unknown error' });
         }
     }).catch(function (err) {
         var msg = (err && (err.statusText || err.message)) || 'Network error';
         if (resultEl) { resultEl.style.color = '#c62828'; resultEl.textContent = 'Failed: ' + msg; }
-        Dashboard.alert({ title: 'Provider test failed', message: msg });
     });
 }
+
+// ── Collect ───────────────────────────────────────────────────────────────────
 
 function collectProviders(view) {
     var result = [];
@@ -192,8 +307,13 @@ function collectProviders(view) {
             DisplayNameClaim: gval(view, 'prov_displayclaim_' + idx),
             ButtonColor: gval(view, 'prov_color_' + idx),
             AdditionalParameters: gval(view, 'prov_params_' + idx),
+            EntitlementClaim: gval(view, 'prov_entclaim_' + idx) || 'entitlements',
+            EntitlementPrefix: gval(view, 'prov_entprefix_' + idx) || 'jellyfin:',
+            EnableEntitlements: gchk(view, 'prov_entitlements_' + idx),
+            RequireEmailVerified: gchk(view, 'prov_emailverified_' + idx),
             Enabled: gchk(view, 'prov_enabled_' + idx),
-            ButtonIcon: ''
+            ButtonIcon: '',
+            RoleTransforms: collectTransforms(view.querySelector('#prov_transforms_' + idx))
         });
     });
     return result;
@@ -210,6 +330,7 @@ function collectRoleMappings(view) {
             RoleName: gval(view, 'role_name_' + idx),
             ProviderId: gval(view, 'role_provider_' + idx),
             Priority: parseInt(gval(view, 'role_priority_' + idx)) || 0,
+            IsExplicitDeny: gchk(view, 'role_deny_' + idx),
             IsAdmin: gchk(view, 'role_admin_' + idx),
             EnableAllLibraries: gchk(view, 'role_alllibs_' + idx),
             LibraryIds: libIds, LibraryNames: [],
@@ -230,6 +351,29 @@ function collectRoleMappings(view) {
     return result;
 }
 
+function collectSamlProviders(view) {
+    var container = view.querySelector('#samlProviderList');
+    if (!container) return [];
+    var result = [];
+    container.querySelectorAll('.oidc-card').forEach(function (card, idx) {
+        var certEl = view.querySelector('#saml_cert_' + idx);
+        result.push({
+            Id: gval(view, 'saml_id_' + idx),
+            DisplayName: gval(view, 'saml_name_' + idx),
+            EntityId: gval(view, 'saml_entity_' + idx),
+            SsoUrl: gval(view, 'saml_sso_' + idx),
+            UsernameClaim: gval(view, 'saml_user_' + idx) || 'NameID',
+            RoleClaim: gval(view, 'saml_role_' + idx) || 'groups',
+            ButtonColor: gval(view, 'saml_color_' + idx) || '#4285F4',
+            IdpCertificate: certEl ? certEl.value.trim() : '',
+            Enabled: gchk(view, 'saml_enabled_' + idx)
+        });
+    });
+    return result;
+}
+
+// ── Main ──────────────────────────────────────────────────────────────────────
+
 export default function (view) {
     view.addEventListener('viewshow', function () {
         Dashboard.showLoadingMsg();
@@ -244,8 +388,10 @@ export default function (view) {
             cfg = config;
             cfg.Providers = cfg.Providers || [];
             cfg.RoleMappings = cfg.RoleMappings || [];
+            cfg.SamlProviders = cfg.SamlProviders || [];
             renderProviders(view);
             renderRoleMappings(view);
+            renderSamlProviders(view);
             view.querySelector('#defaultProvider').value = cfg.DefaultProvider || '';
             view.querySelector('#defaultRoleName').value = cfg.DefaultRoleName || '';
             view.querySelector('#autoCreateUsers').checked = cfg.AutoCreateUsers !== false;
@@ -272,7 +418,7 @@ export default function (view) {
         });
     });
 
-    // Add provider
+    // Add OIDC provider
     view.querySelector('#btnAddProvider').addEventListener('click', function () {
         if (!cfg) return;
         cfg.Providers.push({
@@ -280,7 +426,9 @@ export default function (view) {
             ClientId: '', ClientSecret: '', Scopes: 'openid profile email',
             RoleClaim: 'groups', UsernameClaim: 'preferred_username',
             DisplayNameClaim: 'name', Enabled: true, ButtonColor: '#4285F4',
-            ButtonIcon: '', AdditionalParameters: ''
+            ButtonIcon: '', AdditionalParameters: '',
+            EntitlementClaim: 'entitlements', EntitlementPrefix: 'jellyfin:',
+            EnableEntitlements: true, RequireEmailVerified: false, RoleTransforms: []
         });
         renderProviders(view);
     });
@@ -289,7 +437,8 @@ export default function (view) {
     view.querySelector('#btnAddRoleMapping').addEventListener('click', function () {
         if (!cfg) return;
         cfg.RoleMappings.push({
-            RoleName: '', ProviderId: '', Priority: 0, IsAdmin: false, EnableAllLibraries: false,
+            RoleName: '', ProviderId: '', Priority: 0, IsExplicitDeny: false,
+            IsAdmin: false, EnableAllLibraries: false,
             LibraryIds: [], LibraryNames: [], EnableLiveTv: false,
             EnableLiveTvManagement: false, EnableMediaPlayback: true,
             EnableRemoteAccess: true, EnableTranscoding: true,
@@ -301,12 +450,36 @@ export default function (view) {
         renderRoleMappings(view);
     });
 
+    // Add SAML provider
+    var btnAddSaml = view.querySelector('#btnAddSamlProvider');
+    if (btnAddSaml) {
+        btnAddSaml.addEventListener('click', function () {
+            if (!cfg) return;
+            cfg.SamlProviders = cfg.SamlProviders || [];
+            cfg.SamlProviders.push({
+                Id: 'saml-' + Date.now(),
+                DisplayName: 'New SAML Provider',
+                EntityId: '', SsoUrl: '', IdpCertificate: '',
+                UsernameClaim: 'NameID', RoleClaim: 'groups',
+                ButtonColor: '#4285F4', Enabled: true
+            });
+            renderSamlProviders(view);
+        });
+    }
+
+    // Preview button
+    var btnPreview = view.querySelector('#btnPreview');
+    if (btnPreview) {
+        btnPreview.addEventListener('click', function () { runPreview(view); });
+    }
+
     // Save
     view.querySelector('#btnSave').addEventListener('click', function () {
         if (!cfg) return;
         Dashboard.showLoadingMsg();
         cfg.Providers = collectProviders(view);
         cfg.RoleMappings = collectRoleMappings(view);
+        cfg.SamlProviders = collectSamlProviders(view);
         cfg.DefaultProvider = gval(view, 'defaultProvider');
         cfg.DefaultRoleName = gval(view, 'defaultRoleName');
         cfg.AutoCreateUsers = gchk(view, 'autoCreateUsers');
@@ -319,20 +492,34 @@ export default function (view) {
         });
     });
 
-    // Event delegation for dynamic buttons in provider list
+    // Event delegation — provider list
     view.querySelector('#providerList').addEventListener('click', function (e) {
         var btn = e.target.closest('[data-action]');
         if (!btn) return;
         var idx = parseInt(btn.getAttribute('data-idx'));
-        if (btn.getAttribute('data-action') === 'remove-provider') {
+        var action = btn.getAttribute('data-action');
+        if (action === 'remove-provider') {
             cfg.Providers.splice(idx, 1);
             renderProviders(view);
-        } else if (btn.getAttribute('data-action') === 'test-provider') {
+        } else if (action === 'test-provider') {
             testProvider(view, idx);
+        } else if (action === 'add-transform') {
+            var container = view.querySelector('#prov_transforms_' + idx);
+            if (container) {
+                var row = document.createElement('div');
+                row.className = 'oidc-transform-row';
+                row.innerHTML =
+                    '<input type="text" class="xform-from" placeholder="From (exact)" />' +
+                    '<span style="margin:0 0.3em;">→</span>' +
+                    '<input type="text" class="xform-to" placeholder="To (empty=drop)" />' +
+                    '<button type="button" class="oidc-btn-remove" style="padding:0.1em 0.5em;margin-left:0.3em;">&times;</button>';
+                row.querySelector('button').addEventListener('click', function () { row.remove(); });
+                container.appendChild(row);
+            }
         }
     });
 
-    // Event delegation for dynamic buttons in role mapping list
+    // Event delegation — role mapping list (clicks)
     view.querySelector('#roleMappingList').addEventListener('click', function (e) {
         if (e.target.classList.contains('remove')) {
             e.target.parentElement.remove();
@@ -356,4 +543,35 @@ export default function (view) {
             sel.value = '';
         }
     });
+
+    // Event delegation — toggling "Explicit Deny" clears all permission checkboxes
+    // on the card so the deny only strips what the admin explicitly opts in to.
+    // Without this, RoleMapping's default-true flags (Playback/Remote/Transcoding)
+    // would silently extend the deny to permissions the admin never selected.
+    view.querySelector('#roleMappingList').addEventListener('change', function (e) {
+        if (!e.target.id || e.target.id.indexOf('role_deny_') !== 0) return;
+        if (!e.target.checked) return;
+        var idx = e.target.id.substring('role_deny_'.length);
+        var perms = ['admin', 'alllibs', 'livetv', 'livetvmgmt', 'playback', 'remote',
+                     'transcode', 'delete', 'collections', 'subtitles', 'download',
+                     'syncplay', 'syncplayhost'];
+        perms.forEach(function (p) {
+            var cb = view.querySelector('#role_' + p + '_' + idx);
+            if (cb) cb.checked = false;
+        });
+    });
+
+    // Event delegation — SAML provider list
+    var samlList = view.querySelector('#samlProviderList');
+    if (samlList) {
+        samlList.addEventListener('click', function (e) {
+            var btn = e.target.closest('[data-action]');
+            if (!btn) return;
+            var idx = parseInt(btn.getAttribute('data-idx'));
+            if (btn.getAttribute('data-action') === 'remove-saml') {
+                cfg.SamlProviders.splice(idx, 1);
+                renderSamlProviders(view);
+            }
+        });
+    }
 }

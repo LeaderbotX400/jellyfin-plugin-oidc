@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using System.IdentityModel.Tokens.Jwt;
 using System.Linq;
 using System.Text.Json;
+using Jellyfin.Plugin.OIDC.Configuration;
 
 namespace Jellyfin.Plugin.OIDC.Services;
 
@@ -39,19 +40,18 @@ public static class ClaimParser
     private static string[] ExtractFromFlatClaim(JwtSecurityToken token, string claimType)
     {
         var claims = token.Claims.Where(c => c.Type == claimType).Select(c => c.Value).ToArray();
-        if (claims.Length > 0)
+        if (claims.Length == 0)
         {
-            return claims;
+            return Array.Empty<string>();
         }
 
-        // Try parsing the single claim value as a JSON array
-        var singleClaim = token.Claims.FirstOrDefault(c => c.Type == claimType)?.Value;
-        if (singleClaim != null && singleClaim.TrimStart().StartsWith('['))
+        // Single claim whose value is a JSON array string (some IdPs encode arrays this way)
+        if (claims.Length == 1 && claims[0].TrimStart().StartsWith('['))
         {
-            return ParseJsonStringArray(singleClaim);
+            return ParseJsonStringArray(claims[0]);
         }
 
-        return Array.Empty<string>();
+        return claims;
     }
 
     private static string[] ExtractFromNestedClaim(JwtSecurityToken token, string[] pathParts)
@@ -136,6 +136,45 @@ public static class ClaimParser
         }
 
         return Array.Empty<string>();
+    }
+
+    /// <summary>
+    /// Applies claim transform rules to a set of role values.
+    /// Rules are applied in order; first match wins. Empty ToValue drops the value.
+    /// Values with no matching rule pass through unchanged.
+    /// </summary>
+    public static string[] ApplyTransforms(string[] values, IReadOnlyList<ClaimTransform>? transforms)
+    {
+        if (transforms == null || transforms.Count == 0)
+        {
+            return values;
+        }
+
+        var result = new List<string>(values.Length);
+        foreach (var value in values)
+        {
+            var matched = false;
+            foreach (var transform in transforms)
+            {
+                if (string.Equals(value, transform.FromValue, StringComparison.OrdinalIgnoreCase))
+                {
+                    matched = true;
+                    if (!string.IsNullOrEmpty(transform.ToValue))
+                    {
+                        result.Add(transform.ToValue);
+                    }
+
+                    break;
+                }
+            }
+
+            if (!matched)
+            {
+                result.Add(value);
+            }
+        }
+
+        return result.ToArray();
     }
 
     private static string Base64UrlDecode(string input)

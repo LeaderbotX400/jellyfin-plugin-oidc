@@ -3,9 +3,11 @@ using System.Collections.Generic;
 using System.Linq;
 using System.Threading.Tasks;
 using Jellyfin.Data;
+using Jellyfin.Database.Implementations.Entities;
 using Jellyfin.Database.Implementations.Enums;
 using Jellyfin.Plugin.OIDC.Configuration;
 using MediaBrowser.Controller.Library;
+using MediaBrowser.Model.Activity;
 using Microsoft.Extensions.Logging;
 using SyncPlayAccess = Jellyfin.Database.Implementations.Enums.SyncPlayUserAccessType;
 
@@ -15,25 +17,31 @@ public class RbacService
 {
     private readonly IUserManager _userManager;
     private readonly ILibraryManager _libraryManager;
+    private readonly IActivityManager _activityManager;
+    private readonly IPluginConfigProvider _configProvider;
     private readonly ILogger<RbacService> _logger;
 
     public RbacService(
         IUserManager userManager,
         ILibraryManager libraryManager,
+        IActivityManager activityManager,
+        IPluginConfigProvider configProvider,
         ILogger<RbacService> logger)
     {
         _userManager = userManager;
         _libraryManager = libraryManager;
+        _activityManager = activityManager;
+        _configProvider = configProvider;
         _logger = logger;
     }
 
-    public async Task ApplyRoleMappingsAsync(Guid userId, string[] userRoles, string providerId)
+    public async Task ApplyRoleMappingsAsync(
+        Guid userId,
+        string[] userRoles,
+        string[] entitlements,
+        string providerId)
     {
-        var config = OidcPlugin.Instance?.Configuration;
-        if (config == null)
-        {
-            return;
-        }
+        var config = _configProvider.GetConfiguration();
 
         var user = _userManager.GetUserById(userId);
         if (user == null)
@@ -42,7 +50,58 @@ public class RbacService
             return;
         }
 
-        var matchedMappings = config.RoleMappings
+        var preview = ComputePermissions(userRoles, entitlements, providerId, config);
+
+        if (preview.MatchedGrantMappings.Length == 0 && !preview.ParsedEntitlements.Any())
+        {
+            _logger.LogInformation(
+                "No role mappings or entitlements matched for user {Username} (roles: [{Roles}])",
+                user.Username, string.Join(", ", userRoles));
+            return;
+        }
+
+        ApplyToUser(user, preview);
+        await _userManager.UpdateUserAsync(user).ConfigureAwait(false);
+
+        _logger.LogInformation(
+            "Applied RBAC for user {Username}: admin={IsAdmin}, libraries={Libraries}, " +
+            "grants=[{Grants}], denies=[{Denies}], entitlements={EntCount}",
+            user.Username,
+            preview.IsAdmin,
+            preview.EnableAllLibraries ? "ALL" : preview.Libraries.Count.ToString(),
+            string.Join(", ", preview.MatchedGrantMappings),
+            string.Join(", ", preview.MatchedDenyMappings),
+            entitlements.Length);
+
+        await LogActivityAsync(
+            "OIDC RBAC permissions updated",
+            "OidcPermissionsChanged",
+            userId,
+            $"Roles: {string.Join(", ", userRoles)}. Admin: {preview.IsAdmin}.",
+            Microsoft.Extensions.Logging.LogLevel.Information).ConfigureAwait(false);
+    }
+
+    /// <summary>Computes what permissions would be applied without writing to any user object.</summary>
+    public PermissionPreview PreviewPermissions(string[] userRoles, string[] entitlements, string providerId)
+    {
+        return ComputePermissions(userRoles, entitlements, providerId, _configProvider.GetConfiguration());
+    }
+
+    public Dictionary<string, string> GetAvailableLibraries()
+    {
+        var folders = _libraryManager.GetVirtualFolders();
+        return folders.ToDictionary(f => f.ItemId, f => f.Name);
+    }
+
+    // ── Internal computation ─────────────────────────────────────────────────
+
+    private PermissionPreview ComputePermissions(
+        string[] userRoles,
+        string[] entitlements,
+        string providerId,
+        PluginConfiguration config)
+    {
+        var allMatching = config.RoleMappings
             .Where(m =>
                 (string.IsNullOrEmpty(m.ProviderId) ||
                  string.Equals(m.ProviderId, providerId, StringComparison.OrdinalIgnoreCase)) &&
@@ -50,84 +109,113 @@ public class RbacService
             .OrderByDescending(m => m.Priority)
             .ToList();
 
-        if (matchedMappings.Count == 0 && !string.IsNullOrEmpty(config.DefaultRoleName))
+        var grantMappings = allMatching.Where(m => !m.IsExplicitDeny).ToList();
+        var denyMappings = allMatching.Where(m => m.IsExplicitDeny).ToList();
+
+        if (grantMappings.Count == 0 && !string.IsNullOrEmpty(config.DefaultRoleName))
         {
-            var defaultMapping = config.RoleMappings
-                .FirstOrDefault(m => string.Equals(m.RoleName, config.DefaultRoleName, StringComparison.OrdinalIgnoreCase));
-            if (defaultMapping != null)
-            {
-                matchedMappings.Add(defaultMapping);
-            }
+            var def = config.RoleMappings.FirstOrDefault(m =>
+                !m.IsExplicitDeny &&
+                string.Equals(m.RoleName, config.DefaultRoleName, StringComparison.OrdinalIgnoreCase));
+            if (def != null) grantMappings.Add(def);
         }
 
-        if (matchedMappings.Count == 0)
+        var merged = grantMappings.Count > 0 ? MergeMappings(grantMappings) : new RoleMapping();
+        var deny = denyMappings.Count > 0 ? MergeMappings(denyMappings) : null;
+
+        var provider = config.Providers.FirstOrDefault(p =>
+            string.Equals(p.ProviderId, providerId, StringComparison.OrdinalIgnoreCase));
+        var entSet = (provider?.EnableEntitlements == true)
+            ? EntitlementParser.Parse(entitlements, provider.EntitlementPrefix)
+            : new EntitlementSet();
+
+        // OR grants, then apply deny override
+        bool isAdmin = (merged.IsAdmin || entSet.IsAdmin) && !(deny?.IsAdmin ?? false);
+        bool playback = (merged.EnableMediaPlayback || entSet.EnableMediaPlayback) && !(deny?.EnableMediaPlayback ?? false);
+        bool remote = (merged.EnableRemoteAccess || entSet.EnableRemoteAccess) && !(deny?.EnableRemoteAccess ?? false);
+        bool transcode = (merged.EnableTranscoding || entSet.EnableTranscoding) && !(deny?.EnableTranscoding ?? false);
+        bool liveTv = (merged.EnableLiveTv || entSet.EnableLiveTv) && !(deny?.EnableLiveTv ?? false);
+        bool liveTvMgmt = (merged.EnableLiveTvManagement || entSet.EnableLiveTvManagement) && !(deny?.EnableLiveTvManagement ?? false);
+        bool delete = (merged.EnableContentDeletion || entSet.EnableContentDeletion) && !(deny?.EnableContentDeletion ?? false);
+        bool collections = (merged.EnableCollectionManagement || entSet.EnableCollectionManagement) && !(deny?.EnableCollectionManagement ?? false);
+        bool subtitles = (merged.EnableSubtitleManagement || entSet.EnableSubtitleManagement) && !(deny?.EnableSubtitleManagement ?? false);
+        bool download = (merged.EnableDownload || entSet.EnableDownload) && !(deny?.EnableDownload ?? false);
+        bool syncplayHost = (merged.EnableSyncplayGroupCreation || entSet.EnableSyncplayGroupCreation) && !(deny?.EnableSyncplayGroupCreation ?? false);
+        bool syncplay = ((merged.EnableSyncplay || entSet.EnableSyncplay) || syncplayHost) && !(deny?.EnableSyncplay ?? false);
+        bool allLibs = (merged.EnableAllLibraries || entSet.EnableAllLibraries) && !(deny?.EnableAllLibraries ?? false);
+
+        var libraryNames = merged.LibraryNames
+            .Union(entSet.LibraryNames, StringComparer.OrdinalIgnoreCase)
+            .ToList();
+        var libraryIds = merged.LibraryIds.ToList();
+
+        int? maxRating = null;
+        if (merged.MaxParentalRating.HasValue || entSet.MaxParentalRating.HasValue)
         {
-            _logger.LogInformation("No role mappings matched for user {Username} with roles [{Roles}]",
-                user.Username, string.Join(", ", userRoles));
-            return;
+            maxRating = Math.Max(merged.MaxParentalRating ?? 0, entSet.MaxParentalRating ?? 0);
         }
 
-        var merged = MergeMappings(matchedMappings);
+        return new PermissionPreview(
+            IsAdmin: isAdmin,
+            EnableMediaPlayback: playback,
+            EnableRemoteAccess: remote,
+            EnableTranscoding: transcode,
+            EnableLiveTv: liveTv,
+            EnableLiveTvManagement: liveTvMgmt,
+            EnableContentDeletion: delete,
+            EnableCollectionManagement: collections,
+            EnableSubtitleManagement: subtitles,
+            EnableDownload: download,
+            EnableSyncplay: syncplay,
+            EnableSyncplayGroupCreation: syncplayHost,
+            EnableAllLibraries: allLibs,
+            Libraries: allLibs ? new List<string>() : ResolveLibraryIds(libraryIds, libraryNames),
+            MaxParentalRating: maxRating,
+            MatchedGrantMappings: grantMappings.Select(m => m.RoleName).ToArray(),
+            MatchedDenyMappings: denyMappings.Select(m => m.RoleName).ToArray(),
+            ParsedEntitlements: entitlements);
+    }
 
-        user.SetPermission(PermissionKind.IsAdministrator, merged.IsAdmin);
-        user.SetPermission(PermissionKind.EnableMediaPlayback, merged.EnableMediaPlayback);
-        user.SetPermission(PermissionKind.EnableRemoteAccess, merged.EnableRemoteAccess);
-        user.SetPermission(PermissionKind.EnableAudioPlaybackTranscoding, merged.EnableTranscoding);
-        user.SetPermission(PermissionKind.EnableVideoPlaybackTranscoding, merged.EnableTranscoding);
-        user.SetPermission(PermissionKind.EnableLiveTvAccess, merged.EnableLiveTv);
-        user.SetPermission(PermissionKind.EnableLiveTvManagement, merged.EnableLiveTvManagement);
-        user.SetPermission(PermissionKind.EnableContentDeletion, merged.EnableContentDeletion);
-        user.SetPermission(PermissionKind.EnableCollectionManagement, merged.EnableCollectionManagement);
-        user.SetPermission(PermissionKind.EnableSubtitleManagement, merged.EnableSubtitleManagement);
-        user.SetPermission(PermissionKind.EnableContentDownloading, merged.EnableDownload);
+    private void ApplyToUser(Jellyfin.Database.Implementations.Entities.User user, PermissionPreview p)
+    {
+        user.SetPermission(PermissionKind.IsAdministrator, p.IsAdmin);
+        user.SetPermission(PermissionKind.EnableMediaPlayback, p.EnableMediaPlayback);
+        user.SetPermission(PermissionKind.EnableRemoteAccess, p.EnableRemoteAccess);
+        user.SetPermission(PermissionKind.EnableAudioPlaybackTranscoding, p.EnableTranscoding);
+        user.SetPermission(PermissionKind.EnableVideoPlaybackTranscoding, p.EnableTranscoding);
+        user.SetPermission(PermissionKind.EnableLiveTvAccess, p.EnableLiveTv);
+        user.SetPermission(PermissionKind.EnableLiveTvManagement, p.EnableLiveTvManagement);
+        user.SetPermission(PermissionKind.EnableContentDeletion, p.EnableContentDeletion);
+        user.SetPermission(PermissionKind.EnableCollectionManagement, p.EnableCollectionManagement);
+        user.SetPermission(PermissionKind.EnableSubtitleManagement, p.EnableSubtitleManagement);
+        user.SetPermission(PermissionKind.EnableContentDownloading, p.EnableDownload);
 
-        user.SyncPlayAccess = merged.EnableSyncplayGroupCreation
+        user.SyncPlayAccess = p.EnableSyncplayGroupCreation
             ? SyncPlayAccess.CreateAndJoinGroups
-            : merged.EnableSyncplay
+            : p.EnableSyncplay
                 ? SyncPlayAccess.JoinGroups
                 : SyncPlayAccess.None;
 
-        if (merged.EnableAllLibraries)
+        if (p.EnableAllLibraries)
         {
             user.SetPermission(PermissionKind.EnableAllFolders, true);
         }
         else
         {
             user.SetPermission(PermissionKind.EnableAllFolders, false);
-            var resolvedIds = ResolveLibraryIds(merged.LibraryIds, merged.LibraryNames);
-            user.SetPreference(PreferenceKind.EnabledFolders, resolvedIds.ToArray());
+            user.SetPreference(PreferenceKind.EnabledFolders, p.Libraries.ToArray());
         }
 
-        if (merged.MaxParentalRating.HasValue)
+        if (p.MaxParentalRating.HasValue)
         {
-            user.MaxParentalRatingScore = merged.MaxParentalRating;
+            user.MaxParentalRatingScore = p.MaxParentalRating;
         }
-
-        await _userManager.UpdateUserAsync(user).ConfigureAwait(false);
-
-        _logger.LogInformation(
-            "Applied RBAC for user {Username}: admin={IsAdmin}, libraries={LibraryCount}, roles matched=[{Roles}]",
-            user.Username,
-            merged.IsAdmin,
-            merged.EnableAllLibraries ? "ALL" : merged.LibraryIds.Count.ToString(),
-            string.Join(", ", matchedMappings.Select(m => m.RoleName)));
-    }
-
-    public Dictionary<string, string> GetAvailableLibraries()
-    {
-        var folders = _libraryManager.GetVirtualFolders();
-        return folders.ToDictionary(
-            f => f.ItemId,
-            f => f.Name);
     }
 
     private List<string> ResolveLibraryIds(List<string> ids, List<string> names)
     {
         var resolved = new HashSet<string>(ids, StringComparer.OrdinalIgnoreCase);
-        if (names.Count == 0)
-        {
-            return resolved.ToList();
-        }
+        if (names.Count == 0) return resolved.ToList();
 
         var folders = _libraryManager.GetVirtualFolders();
         foreach (var name in names)
@@ -149,7 +237,7 @@ public class RbacService
 
     private static RoleMapping MergeMappings(List<RoleMapping> mappings)
     {
-        var merged = new RoleMapping
+        return new RoleMapping
         {
             IsAdmin = mappings.Any(m => m.IsAdmin),
             EnableAllLibraries = mappings.Any(m => m.EnableAllLibraries),
@@ -169,16 +257,32 @@ public class RbacService
                 .Select(m => m.MaxParentalRating!.Value)
                 .DefaultIfEmpty()
                 .Max(),
-            LibraryIds = mappings
-                .SelectMany(m => m.LibraryIds)
-                .Distinct(StringComparer.OrdinalIgnoreCase)
-                .ToList(),
-            LibraryNames = mappings
-                .SelectMany(m => m.LibraryNames)
-                .Distinct(StringComparer.OrdinalIgnoreCase)
-                .ToList()
+            LibraryIds = mappings.SelectMany(m => m.LibraryIds)
+                .Distinct(StringComparer.OrdinalIgnoreCase).ToList(),
+            LibraryNames = mappings.SelectMany(m => m.LibraryNames)
+                .Distinct(StringComparer.OrdinalIgnoreCase).ToList()
         };
+    }
 
-        return merged;
+    internal async Task LogActivityAsync(
+        string name,
+        string type,
+        Guid userId,
+        string? overview,
+        Microsoft.Extensions.Logging.LogLevel severity)
+    {
+        try
+        {
+            var entry = new ActivityLog(name, type, userId)
+            {
+                Overview = overview,
+                LogSeverity = severity
+            };
+            await _activityManager.CreateAsync(entry).ConfigureAwait(false);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogDebug(ex, "Failed to write activity log entry '{Name}'", name);
+        }
     }
 }

@@ -17,11 +17,16 @@ public class ConfigController : ControllerBase
 {
     private readonly RbacService _rbacService;
     private readonly IHttpClientFactory _httpClientFactory;
+    private readonly IPluginConfigProvider _configProvider;
 
-    public ConfigController(RbacService rbacService, IHttpClientFactory httpClientFactory)
+    public ConfigController(
+        RbacService rbacService,
+        IHttpClientFactory httpClientFactory,
+        IPluginConfigProvider configProvider)
     {
         _rbacService = rbacService;
         _httpClientFactory = httpClientFactory;
+        _configProvider = configProvider;
     }
 
     [HttpGet("Libraries")]
@@ -30,17 +35,31 @@ public class ConfigController : ControllerBase
         return Ok(_rbacService.GetAvailableLibraries());
     }
 
+    [HttpGet("PreviewPermissions")]
+    public ActionResult PreviewPermissions(
+        [FromQuery] string? providerId,
+        [FromQuery] string? roles,
+        [FromQuery] string? entitlements)
+    {
+        var roleArray = roles?.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+                        ?? Array.Empty<string>();
+        var entArray = entitlements?.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+                       ?? Array.Empty<string>();
+
+        var preview = _rbacService.PreviewPermissions(roleArray, entArray, providerId ?? string.Empty);
+        return Ok(preview);
+    }
+
     [HttpGet("Status")]
     public ActionResult GetStatus()
     {
-        var config = OidcPlugin.Instance?.Configuration;
+        var config = _configProvider.GetConfiguration();
         return Ok(new
         {
             PluginVersion = OidcPlugin.Instance?.Version?.ToString() ?? "unknown",
-            ProviderCount = config?.Providers.Count ?? 0,
-            RoleMappingCount = config?.RoleMappings.Count ?? 0,
-            EnabledProviders = config?.Providers.Where(p => p.Enabled).Select(p => p.DisplayName).ToList()
-                               ?? new List<string>()
+            ProviderCount = config.Providers.Count,
+            RoleMappingCount = config.RoleMappings.Count,
+            EnabledProviders = config.Providers.Where(p => p.Enabled).Select(p => p.DisplayName).ToList()
         });
     }
 

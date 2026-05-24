@@ -11,7 +11,10 @@ using IdentityModel;
 using IdentityModel.Client;
 using Jellyfin.Plugin.OIDC.Configuration;
 using Jellyfin.Plugin.OIDC.Services;
+using MediaBrowser.Common.Api;
+using MediaBrowser.Controller.Library;
 using MediaBrowser.Controller.Session;
+using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.Extensions.Logging;
@@ -29,6 +32,12 @@ public class OidcController : ControllerBase
     private readonly UserSyncService _userSyncService;
     private readonly ISessionManager _sessionManager;
     private readonly IHttpClientFactory _httpClientFactory;
+    private readonly JwksCache _jwksCache;
+    private readonly OidcDiscoveryCache _discoveryCache;
+    private readonly RbacService _rbacService;
+    private readonly OidcUserStore _userStore;
+    private readonly IUserManager _userManager;
+    private readonly IPluginConfigProvider _configProvider;
     private readonly ILogger<OidcController> _logger;
 
     public OidcController(
@@ -36,12 +45,24 @@ public class OidcController : ControllerBase
         UserSyncService userSyncService,
         ISessionManager sessionManager,
         IHttpClientFactory httpClientFactory,
+        JwksCache jwksCache,
+        OidcDiscoveryCache discoveryCache,
+        RbacService rbacService,
+        OidcUserStore userStore,
+        IUserManager userManager,
+        IPluginConfigProvider configProvider,
         ILogger<OidcController> logger)
     {
         _stateManager = stateManager;
         _userSyncService = userSyncService;
         _sessionManager = sessionManager;
         _httpClientFactory = httpClientFactory;
+        _jwksCache = jwksCache;
+        _discoveryCache = discoveryCache;
+        _rbacService = rbacService;
+        _userStore = userStore;
+        _userManager = userManager;
+        _configProvider = configProvider;
         _logger = logger;
     }
 
@@ -64,7 +85,7 @@ public class OidcController : ControllerBase
         var codeVerifier = CryptoRandom.CreateUniqueId(64);
         var codeChallenge = CreateCodeChallenge(codeVerifier);
         var nonce = CryptoRandom.CreateUniqueId(32);
-        var redirectUri = BuildRedirectUri(providerId);
+        var redirectUri = BuildCallbackUri(providerId);
 
         var state = new OidcState
         {
@@ -156,29 +177,23 @@ public class OidcController : ControllerBase
             return BadRequest("Could not read identity token");
         }
 
-        if (string.IsNullOrEmpty(disco.JwksUri))
-        {
-            _logger.LogError("JWKS URI missing from discovery document for provider {Provider}", providerId);
-            return StatusCode(502, "Failed to retrieve signing keys from identity provider");
-        }
-
-        JsonWebKeySet msKeySet;
+        SecurityKey[] signingKeys;
         try
         {
-            var jwksJson = await httpClient.GetStringAsync(disco.JwksUri).ConfigureAwait(false);
-            msKeySet = new JsonWebKeySet(jwksJson);
+            signingKeys = await SigningKeyResolver.ResolveAsync(
+                tokenString, provider.ClientSecret, disco.JwksUri, _jwksCache).ConfigureAwait(false);
         }
         catch (Exception ex)
         {
-            _logger.LogError(ex, "Failed to fetch JWKS from {JwksUri}", disco.JwksUri);
-            return StatusCode(502, "Failed to retrieve signing keys from identity provider");
+            _logger.LogError(ex, "Failed to resolve signing keys for provider {Provider}", providerId);
+            return StatusCode(502, "Failed to resolve signing keys from identity provider");
         }
 
         var validationParameters = new TokenValidationParameters
         {
             ValidIssuer = disco.Issuer,
             ValidAudience = provider.ClientId,
-            IssuerSigningKeys = msKeySet.GetSigningKeys(),
+            IssuerSigningKeys = signingKeys,
             ValidateIssuer = true,
             ValidateAudience = true,
             ValidateLifetime = true,
@@ -196,6 +211,12 @@ public class OidcController : ControllerBase
         catch (SecurityTokenException ex)
         {
             _logger.LogWarning("ID token validation failed for provider {Provider}: {Message}", providerId, ex.Message);
+            await _rbacService.LogActivityAsync(
+                "OIDC login failed: token validation error",
+                "OidcLoginFailure",
+                Guid.Empty,
+                ex.Message,
+                Microsoft.Extensions.Logging.LogLevel.Warning).ConfigureAwait(false);
             return BadRequest("Token validation failed");
         }
 
@@ -206,10 +227,24 @@ public class OidcController : ControllerBase
             return BadRequest("Token validation failed: nonce mismatch");
         }
 
+        // A.1 — email_verified enforcement
+        if (provider.RequireEmailVerified)
+        {
+            var emailVerified = ClaimParser.ExtractClaim(idToken, "email_verified");
+            if (!string.Equals(emailVerified, "true", StringComparison.OrdinalIgnoreCase))
+            {
+                _logger.LogWarning(
+                    "OIDC login rejected: email_verified={Value} for provider {Provider}",
+                    emailVerified, providerId);
+                return Unauthorized("Email address is not verified. Please verify your email with the identity provider.");
+            }
+        }
+
+        var sub = ClaimParser.ExtractClaim(idToken, "sub");
         var username = ClaimParser.ExtractClaim(idToken, provider.UsernameClaim);
         if (string.IsNullOrEmpty(username))
         {
-            username = ClaimParser.ExtractClaim(idToken, "sub");
+            username = sub;
         }
 
         if (string.IsNullOrEmpty(username))
@@ -219,7 +254,7 @@ public class OidcController : ControllerBase
 
         var displayName = ClaimParser.ExtractClaim(idToken, provider.DisplayNameClaim);
 
-        // Extract roles from validated ID token; fall back to access token for non-standard IdPs
+        // Extract roles; fall back to access token for non-standard IdPs
         var roles = ClaimParser.ExtractRoles(idToken, provider.RoleClaim);
         if (roles.Length == 0 && handler.CanReadToken(tokenResponse.AccessToken))
         {
@@ -227,15 +262,26 @@ public class OidcController : ControllerBase
             roles = ClaimParser.ExtractRoles(accessToken, provider.RoleClaim);
         }
 
-        _logger.LogInformation("OIDC auth successful: user={Username}, roles=[{Roles}], provider={Provider}",
-            username, string.Join(", ", roles), providerId);
+        // A.3 — apply claim transforms before role matching
+        roles = ClaimParser.ApplyTransforms(roles, provider.RoleTransforms);
+
+        var entitlements = provider.EnableEntitlements
+            ? ClaimParser.ExtractRoles(idToken, provider.EntitlementClaim)
+            : Array.Empty<string>();
+
+        _logger.LogInformation(
+            "OIDC auth successful: user={Username}, roles=[{Roles}], entitlements={EntitlementCount}, provider={Provider}",
+            username, string.Join(", ", roles), entitlements.Length, providerId);
 
         var sessionToken = _stateManager.StoreAuthorizedSession(new AuthorizedSession
         {
             ProviderId = providerId,
             Username = username,
             DisplayName = displayName,
-            Roles = roles
+            Sub = sub,
+            Roles = roles,
+            Entitlements = entitlements,
+            LinkUserId = oidcState.LinkingForUserId
         });
 
         return Content(BuildCallbackHtml(sessionToken, providerId), "text/html");
@@ -259,10 +305,23 @@ public class OidcController : ControllerBase
 
         try
         {
+            // C.2 — handle account linking if this is a link flow
+            if (session.LinkUserId.HasValue)
+            {
+                await _userStore.LinkAsync(session.LinkUserId.Value, session.Sub, providerId)
+                    .ConfigureAwait(false);
+                _logger.LogInformation(
+                    "Linked user {UserId} to OIDC sub={Sub} provider={Provider}",
+                    session.LinkUserId.Value, session.Sub, providerId);
+                return Ok(new { Linked = true, Sub = session.Sub });
+            }
+
             var userId = await _userSyncService.SyncUserAsync(
                 session.Username,
                 session.DisplayName,
+                session.Sub,
                 session.Roles,
+                session.Entitlements,
                 providerId).ConfigureAwait(false);
 
             var authRequest = new AuthenticationRequest
@@ -275,6 +334,13 @@ public class OidcController : ControllerBase
             };
 
             var authResult = await _sessionManager.AuthenticateDirect(authRequest).ConfigureAwait(false);
+
+            await _rbacService.LogActivityAsync(
+                $"OIDC login: {session.Username}",
+                "OidcLoginSuccess",
+                userId,
+                $"Provider: {providerId}",
+                Microsoft.Extensions.Logging.LogLevel.Information).ConfigureAwait(false);
 
             return Ok(authResult);
         }
@@ -293,12 +359,7 @@ public class OidcController : ControllerBase
     [HttpGet("Providers")]
     public ActionResult GetProviders()
     {
-        var config = OidcPlugin.Instance?.Configuration;
-        if (config == null)
-        {
-            return Ok(Array.Empty<object>());
-        }
-
+        var config = _configProvider.GetConfiguration();
         var providers = config.Providers
             .Where(p => p.Enabled)
             .Select(p => new
@@ -313,28 +374,114 @@ public class OidcController : ControllerBase
         return Ok(providers);
     }
 
+    // ── Account linking endpoints ─────────────────────────────────────────────
+
+    [HttpGet("link/start/{providerId}")]
+    [Authorize]
+    public async Task<ActionResult> LinkStart(string providerId)
+    {
+        var provider = GetProvider(providerId);
+        if (provider == null)
+        {
+            return NotFound($"Provider '{providerId}' not found or disabled");
+        }
+
+        // Identify the currently authenticated Jellyfin user
+        var jellyfinUserId = GetCurrentUserId();
+        if (jellyfinUserId == null)
+        {
+            return Unauthorized("Could not determine current user");
+        }
+
+        var disco = await GetDiscoveryDocumentAsync(provider).ConfigureAwait(false);
+        if (disco.IsError)
+        {
+            return StatusCode(502, "Failed to contact identity provider");
+        }
+
+        var codeVerifier = CryptoRandom.CreateUniqueId(64);
+        var codeChallenge = CreateCodeChallenge(codeVerifier);
+        var nonce = CryptoRandom.CreateUniqueId(32);
+        var redirectUri = BuildCallbackUri(providerId);
+
+        var stateKey = _stateManager.StoreState(new OidcState
+        {
+            ProviderId = providerId,
+            Nonce = nonce,
+            CodeVerifier = codeVerifier,
+            RedirectUri = redirectUri,
+            LinkingForUserId = jellyfinUserId.Value
+        });
+
+        var authorizeUrl = new RequestUrl(disco.AuthorizeEndpoint!);
+        var url = authorizeUrl.CreateAuthorizeUrl(
+            clientId: provider.ClientId,
+            responseType: OidcConstants.ResponseTypes.Code,
+            scope: provider.Scopes,
+            redirectUri: redirectUri,
+            state: stateKey,
+            nonce: nonce,
+            codeChallenge: codeChallenge,
+            codeChallengeMethod: OidcConstants.CodeChallengeMethods.Sha256);
+
+        return Redirect(url);
+    }
+
+    [HttpDelete("link/{providerId}")]
+    [Authorize]
+    public async Task<ActionResult> Unlink(string providerId)
+    {
+        var jellyfinUserId = GetCurrentUserId();
+        if (jellyfinUserId == null)
+        {
+            return Unauthorized();
+        }
+
+        await _userStore.UnlinkAsync(jellyfinUserId.Value, providerId).ConfigureAwait(false);
+        _logger.LogInformation("Unlinked user {UserId} from provider {Provider}", jellyfinUserId.Value, providerId);
+        return Ok();
+    }
+
+    [HttpGet("links")]
+    [Authorize]
+    public async Task<ActionResult> GetLinks()
+    {
+        var jellyfinUserId = GetCurrentUserId();
+        if (jellyfinUserId == null)
+        {
+            return Unauthorized();
+        }
+
+        var links = await _userStore.GetLinksForUserAsync(jellyfinUserId.Value).ConfigureAwait(false);
+        return Ok(links.Select(l => new { l.ProviderId, l.Sub }));
+    }
+
+    // ── Helpers ──────────────────────────────────────────────────────────────
+
+    private Guid? GetCurrentUserId()
+    {
+        var userIdClaim = User.FindFirst(System.Security.Claims.ClaimTypes.NameIdentifier)?.Value
+                         ?? User.FindFirst("uid")?.Value
+                         ?? User.FindFirst("sub")?.Value;
+        if (Guid.TryParse(userIdClaim, out var userId))
+        {
+            return userId;
+        }
+
+        return null;
+    }
+
     private OidcProviderConfig? GetProvider(string providerId)
     {
-        return OidcPlugin.Instance?.Configuration.Providers
+        return _configProvider.GetConfiguration().Providers
             .FirstOrDefault(p => string.Equals(p.ProviderId, providerId, StringComparison.OrdinalIgnoreCase)
                                  && p.Enabled);
     }
 
-    private async Task<DiscoveryDocumentResponse> GetDiscoveryDocumentAsync(OidcProviderConfig provider)
-    {
-        var httpClient = _httpClientFactory.CreateClient("OidcPlugin");
-        return await httpClient.GetDiscoveryDocumentAsync(new DiscoveryDocumentRequest
-        {
-            Address = provider.Authority,
-            Policy = new DiscoveryPolicy
-            {
-                ValidateIssuerName = true,
-                ValidateEndpoints = false
-            }
-        }).ConfigureAwait(false);
-    }
+    private Task<DiscoveryDocumentResponse> GetDiscoveryDocumentAsync(OidcProviderConfig provider) =>
+        _discoveryCache.GetAsync(provider.Authority);
 
-    private string BuildRedirectUri(string providerId)
+    private string BuildCallbackUri(string providerId)
     {
         return $"{Request.Scheme}://{Request.Host}/sso/OIDC/Callback/{providerId}";
     }
@@ -396,6 +543,12 @@ public class OidcController : ControllerBase
                 return r.json();
             })
             .then(function(auth) {
+                // Link flow returns {Linked: true} instead of a session
+                if (auth.Linked) {
+                    document.getElementById('status').textContent = 'Account linked successfully!';
+                    setTimeout(function() { window.close(); }, 2000);
+                    return;
+                }
                 var credentials = {
                     Servers: [{
                         ManualAddress: window.location.origin,

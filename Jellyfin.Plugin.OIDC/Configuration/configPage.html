@@ -5,21 +5,28 @@
             <h2 style="margin-bottom:1em;">OIDC RBAC Configuration</h2>
 
             <div style="display:flex;gap:0;margin-bottom:1.5em;border-bottom:2px solid #444;">
-                <button type="button" class="oidc-tab" data-tab="providers" style="padding:0.6em 1.5em;cursor:pointer;border:none;background:none;color:#00a4dc;font-size:1em;border-bottom:2px solid #00a4dc;margin-bottom:-2px;">Providers</button>
+                <button type="button" class="oidc-tab" data-tab="providers" style="padding:0.6em 1.5em;cursor:pointer;border:none;background:none;color:#00a4dc;font-size:1em;border-bottom:2px solid #00a4dc;margin-bottom:-2px;">OIDC Providers</button>
                 <button type="button" class="oidc-tab" data-tab="roles" style="padding:0.6em 1.5em;cursor:pointer;border:none;background:none;color:#aaa;font-size:1em;border-bottom:2px solid transparent;margin-bottom:-2px;">Role Mappings</button>
+                <button type="button" class="oidc-tab" data-tab="saml" style="padding:0.6em 1.5em;cursor:pointer;border:none;background:none;color:#aaa;font-size:1em;border-bottom:2px solid transparent;margin-bottom:-2px;">SAML</button>
+                <button type="button" class="oidc-tab" data-tab="preview" style="padding:0.6em 1.5em;cursor:pointer;border:none;background:none;color:#aaa;font-size:1em;border-bottom:2px solid transparent;margin-bottom:-2px;">Preview</button>
                 <button type="button" class="oidc-tab" data-tab="general" style="padding:0.6em 1.5em;cursor:pointer;border:none;background:none;color:#aaa;font-size:1em;border-bottom:2px solid transparent;margin-bottom:-2px;">General</button>
             </div>
 
+            <!-- OIDC Providers tab -->
             <div id="tab-providers" class="oidc-tab-content">
                 <div style="margin-bottom:1em;">
                     <button type="button" id="btnAddProvider" is="emby-button" class="raised">
-                        <span>+ Add Provider</span>
+                        <span>+ Add OIDC Provider</span>
                     </button>
                 </div>
                 <div id="providerList"></div>
             </div>
 
+            <!-- Role Mappings tab -->
             <div id="tab-roles" class="oidc-tab-content" style="display:none;">
+                <p style="color:#aaa;font-size:0.9em;margin-top:0;">
+                    Grant mappings apply permissions. Deny mappings (toggle below) strip permissions after all grants — deny wins.
+                </p>
                 <div style="margin-bottom:1em;">
                     <button type="button" id="btnAddRoleMapping" is="emby-button" class="raised">
                         <span>+ Add Role Mapping</span>
@@ -28,6 +35,47 @@
                 <div id="roleMappingList"></div>
             </div>
 
+            <!-- SAML tab -->
+            <div id="tab-saml" class="oidc-tab-content" style="display:none;">
+                <p style="color:#aaa;font-size:0.9em;margin-top:0;">
+                    SAML 2.0 SP-initiated SSO (HTTP-Redirect + HTTP-POST). Roles map to the same Role Mappings as OIDC.
+                </p>
+                <div style="margin-bottom:1em;">
+                    <button type="button" id="btnAddSamlProvider" is="emby-button" class="raised">
+                        <span>+ Add SAML Provider</span>
+                    </button>
+                </div>
+                <div id="samlProviderList"></div>
+            </div>
+
+            <!-- Preview tab -->
+            <div id="tab-preview" class="oidc-tab-content" style="display:none;">
+                <p style="color:#aaa;font-size:0.9em;margin-top:0;">
+                    Enter roles and entitlements to preview what permissions would be applied, without affecting any real user.
+                </p>
+                <div style="border:1px solid #444;border-radius:8px;padding:1em;background:rgba(255,255,255,0.03);max-width:600px;">
+                    <div style="display:grid;grid-template-columns:1fr 1fr;gap:0.8em;margin-bottom:0.8em;">
+                        <div>
+                            <label class="fieldDescription" for="previewProvider">Provider ID</label>
+                            <input id="previewProvider" type="text" is="emby-input" placeholder="e.g. keycloak" />
+                        </div>
+                        <div style="grid-column:1/-1;">
+                            <label class="fieldDescription" for="previewRoles">Roles (comma-separated)</label>
+                            <input id="previewRoles" type="text" is="emby-input" placeholder="admin,viewer" />
+                        </div>
+                        <div style="grid-column:1/-1;">
+                            <label class="fieldDescription" for="previewEntitlements">Entitlements (comma-separated)</label>
+                            <input id="previewEntitlements" type="text" is="emby-input" placeholder="jellyfin:admin,jellyfin:library:Movies" />
+                        </div>
+                    </div>
+                    <button type="button" id="btnPreview" is="emby-button" class="raised">
+                        <span>Compute Preview</span>
+                    </button>
+                    <pre id="previewResult" style="margin-top:1em;padding:0.8em;background:#1a1a1a;border-radius:4px;font-size:0.85em;white-space:pre-wrap;min-height:4em;"></pre>
+                </div>
+            </div>
+
+            <!-- General tab -->
             <div id="tab-general" class="oidc-tab-content" style="display:none;">
                 <div style="border:1px solid #444;border-radius:8px;padding:1em;background:rgba(255,255,255,0.03);">
                     <div style="display:grid;grid-template-columns:1fr 1fr;gap:0.8em;">
@@ -42,7 +90,7 @@
                         <div style="grid-column:1/-1;">
                             <label>
                                 <input type="checkbox" id="autoCreateUsers" is="emby-checkbox" />
-                                <span>Auto-create users on first OIDC login</span>
+                                <span>Auto-create users on first OIDC/SAML login</span>
                             </label>
                         </div>
                     </div>
@@ -59,6 +107,7 @@
 
     <style>
         .oidc-card { border:1px solid #444; border-radius:8px; padding:1em; margin-bottom:1em; background:rgba(255,255,255,0.03); }
+        .oidc-card-deny { border-color:#c62828; background:rgba(198,40,40,0.05); }
         .oidc-card h4 { margin-top:0; }
         .oidc-grid { display:grid; grid-template-columns:1fr 1fr; gap:0.8em; }
         .oidc-field { display:flex; flex-direction:column; gap:0.3em; }
@@ -72,5 +121,8 @@
         .oidc-library-chip .remove { cursor:pointer; font-weight:bold; color:#c62828; }
         .oidc-btn-remove { background:#c62828;color:#fff;padding:0.4em 1em;border:none;border-radius:4px;cursor:pointer; }
         .oidc-btn-secondary { background:#555;color:#fff;padding:0.4em 1em;border:none;border-radius:4px;cursor:pointer; }
+        .oidc-transform-row { display:flex;align-items:center;margin-bottom:0.4em; }
+        .oidc-transform-row input { flex:1;padding:0.3em; }
+        .oidc-test-result { display:inline-block; }
     </style>
 </div>

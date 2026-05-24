@@ -14,6 +14,9 @@ public sealed class OidcState
     public required string CodeVerifier { get; init; }
     public required string RedirectUri { get; init; }
     public DateTimeOffset CreatedAt { get; init; } = DateTimeOffset.UtcNow;
+
+    /// <summary>Set when initiating an account-linking flow for an already-authenticated Jellyfin user.</summary>
+    public Guid? LinkingForUserId { get; init; }
 }
 
 public sealed class AuthorizedSession
@@ -22,7 +25,12 @@ public sealed class AuthorizedSession
     public required string Username { get; init; }
     public string? DisplayName { get; init; }
     public required string[] Roles { get; init; }
+    public string Sub { get; init; } = string.Empty;
+    public string[] Entitlements { get; init; } = Array.Empty<string>();
     public DateTimeOffset CreatedAt { get; init; } = DateTimeOffset.UtcNow;
+
+    /// <summary>Present when this session is for account linking rather than normal login.</summary>
+    public Guid? LinkUserId { get; init; }
 }
 
 public sealed class StateManager : IHostedService, IDisposable

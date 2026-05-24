@@ -1,5 +1,6 @@
 using System.Linq;
 using System.Text;
+using Jellyfin.Plugin.OIDC.Services;
 using Microsoft.AspNetCore.Mvc;
 
 namespace Jellyfin.Plugin.OIDC.Api;
@@ -8,15 +9,17 @@ namespace Jellyfin.Plugin.OIDC.Api;
 [Route("sso/OIDC")]
 public class LoginButtonController : ControllerBase
 {
+    private readonly IPluginConfigProvider _configProvider;
+
+    public LoginButtonController(IPluginConfigProvider configProvider)
+    {
+        _configProvider = configProvider;
+    }
+
     [HttpGet("LoginButtons")]
     public ActionResult GetLoginButtonsScript()
     {
-        var config = OidcPlugin.Instance?.Configuration;
-        if (config == null)
-        {
-            return Content("", "application/javascript");
-        }
-
+        var config = _configProvider.GetConfiguration();
         var providers = config.Providers.Where(p => p.Enabled).ToList();
         if (providers.Count == 0)
         {
