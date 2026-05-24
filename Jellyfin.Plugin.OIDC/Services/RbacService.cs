@@ -7,6 +7,7 @@ using Jellyfin.Database.Implementations.Enums;
 using Jellyfin.Plugin.OIDC.Configuration;
 using MediaBrowser.Controller.Library;
 using Microsoft.Extensions.Logging;
+using SyncPlayAccess = Jellyfin.Database.Implementations.Enums.SyncPlayUserAccessType;
 
 namespace Jellyfin.Plugin.OIDC.Services;
 
@@ -26,7 +27,7 @@ public class RbacService
         _logger = logger;
     }
 
-    public async Task ApplyRoleMappingsAsync(Guid userId, string[] userRoles)
+    public async Task ApplyRoleMappingsAsync(Guid userId, string[] userRoles, string providerId)
     {
         var config = OidcPlugin.Instance?.Configuration;
         if (config == null)
@@ -42,7 +43,10 @@ public class RbacService
         }
 
         var matchedMappings = config.RoleMappings
-            .Where(m => userRoles.Contains(m.RoleName, StringComparer.OrdinalIgnoreCase))
+            .Where(m =>
+                (string.IsNullOrEmpty(m.ProviderId) ||
+                 string.Equals(m.ProviderId, providerId, StringComparison.OrdinalIgnoreCase)) &&
+                userRoles.Contains(m.RoleName, StringComparer.OrdinalIgnoreCase))
             .OrderByDescending(m => m.Priority)
             .ToList();
 
@@ -75,6 +79,13 @@ public class RbacService
         user.SetPermission(PermissionKind.EnableContentDeletion, merged.EnableContentDeletion);
         user.SetPermission(PermissionKind.EnableCollectionManagement, merged.EnableCollectionManagement);
         user.SetPermission(PermissionKind.EnableSubtitleManagement, merged.EnableSubtitleManagement);
+        user.SetPermission(PermissionKind.EnableContentDownloading, merged.EnableDownload);
+
+        user.SyncPlayAccess = merged.EnableSyncplayGroupCreation
+            ? SyncPlayAccess.CreateAndJoinGroups
+            : merged.EnableSyncplay
+                ? SyncPlayAccess.JoinGroups
+                : SyncPlayAccess.None;
 
         if (merged.EnableAllLibraries)
         {
@@ -150,6 +161,9 @@ public class RbacService
             EnableContentDeletion = mappings.Any(m => m.EnableContentDeletion),
             EnableCollectionManagement = mappings.Any(m => m.EnableCollectionManagement),
             EnableSubtitleManagement = mappings.Any(m => m.EnableSubtitleManagement),
+            EnableDownload = mappings.Any(m => m.EnableDownload),
+            EnableSyncplay = mappings.Any(m => m.EnableSyncplay || m.EnableSyncplayGroupCreation),
+            EnableSyncplayGroupCreation = mappings.Any(m => m.EnableSyncplayGroupCreation),
             MaxParentalRating = mappings
                 .Where(m => m.MaxParentalRating.HasValue)
                 .Select(m => m.MaxParentalRating!.Value)

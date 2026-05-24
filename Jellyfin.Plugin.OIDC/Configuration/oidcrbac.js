@@ -92,6 +92,7 @@ function renderRoleMappings(view) {
             '<div class="oidc-grid">' +
             fld('Role Name', 'text', 'role_name_' + idx, m.RoleName, 'Must match IdP role claim value') +
             fld('Priority', 'number', 'role_priority_' + idx, m.Priority || 0, 'Higher = takes precedence') +
+            fld('Provider Scope', 'text', 'role_provider_' + idx, m.ProviderId || '', 'Leave empty to apply to all providers') +
             '</div>' +
             '<div class="oidc-checkbox-row">' +
             chk('role_admin_' + idx, 'Administrator', m.IsAdmin) +
@@ -104,6 +105,9 @@ function renderRoleMappings(view) {
             chk('role_delete_' + idx, 'Delete Content', m.EnableContentDeletion) +
             chk('role_collections_' + idx, 'Collections', m.EnableCollectionManagement) +
             chk('role_subtitles_' + idx, 'Subtitles', m.EnableSubtitleManagement) +
+            chk('role_download_' + idx, 'Downloads', m.EnableDownload) +
+            chk('role_syncplay_' + idx, 'SyncPlay (join)', m.EnableSyncplay) +
+            chk('role_syncplayhost_' + idx, 'SyncPlay (host)', m.EnableSyncplayGroupCreation) +
             '</div>' +
             '<div class="oidc-field" style="margin-top:0.5em;">' +
             '<label>Libraries (when "All Libraries" is unchecked)</label>' +
@@ -204,6 +208,7 @@ function collectRoleMappings(view) {
         var mr = gval(view, 'role_maxrating_' + idx);
         result.push({
             RoleName: gval(view, 'role_name_' + idx),
+            ProviderId: gval(view, 'role_provider_' + idx),
             Priority: parseInt(gval(view, 'role_priority_' + idx)) || 0,
             IsAdmin: gchk(view, 'role_admin_' + idx),
             EnableAllLibraries: gchk(view, 'role_alllibs_' + idx),
@@ -216,6 +221,9 @@ function collectRoleMappings(view) {
             EnableContentDeletion: gchk(view, 'role_delete_' + idx),
             EnableCollectionManagement: gchk(view, 'role_collections_' + idx),
             EnableSubtitleManagement: gchk(view, 'role_subtitles_' + idx),
+            EnableDownload: gchk(view, 'role_download_' + idx),
+            EnableSyncplay: gchk(view, 'role_syncplay_' + idx),
+            EnableSyncplayGroupCreation: gchk(view, 'role_syncplayhost_' + idx),
             MaxParentalRating: mr ? parseInt(mr) : null
         });
     });
@@ -281,12 +289,14 @@ export default function (view) {
     view.querySelector('#btnAddRoleMapping').addEventListener('click', function () {
         if (!cfg) return;
         cfg.RoleMappings.push({
-            RoleName: '', Priority: 0, IsAdmin: false, EnableAllLibraries: false,
+            RoleName: '', ProviderId: '', Priority: 0, IsAdmin: false, EnableAllLibraries: false,
             LibraryIds: [], LibraryNames: [], EnableLiveTv: false,
             EnableLiveTvManagement: false, EnableMediaPlayback: true,
             EnableRemoteAccess: true, EnableTranscoding: true,
             EnableContentDeletion: false, EnableCollectionManagement: false,
-            EnableSubtitleManagement: false, MaxParentalRating: null
+            EnableSubtitleManagement: false, EnableDownload: false,
+            EnableSyncplay: false, EnableSyncplayGroupCreation: false,
+            MaxParentalRating: null
         });
         renderRoleMappings(view);
     });

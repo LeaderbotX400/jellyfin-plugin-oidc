@@ -49,6 +49,9 @@ public class RoleMapping
 {
     public string RoleName { get; set; } = string.Empty;
 
+    /// <summary>Provider this mapping applies to. Empty means it applies to all providers.</summary>
+    public string ProviderId { get; set; } = string.Empty;
+
     public bool IsAdmin { get; set; }
 
     public bool EnableAllLibraries { get; set; }
@@ -72,6 +75,14 @@ public class RoleMapping
     public bool EnableCollectionManagement { get; set; }
 
     public bool EnableSubtitleManagement { get; set; }
+
+    public bool EnableDownload { get; set; }
+
+    /// <summary>Allow joining existing SyncPlay groups.</summary>
+    public bool EnableSyncplay { get; set; }
+
+    /// <summary>Allow creating SyncPlay groups (implies EnableSyncplay).</summary>
+    public bool EnableSyncplayGroupCreation { get; set; }
 
     public int? MaxParentalRating { get; set; }
 

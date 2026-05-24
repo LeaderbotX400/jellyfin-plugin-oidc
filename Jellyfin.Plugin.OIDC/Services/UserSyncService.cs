@@ -24,7 +24,7 @@ public class UserSyncService
         _logger = logger;
     }
 
-    public async Task<Guid> SyncUserAsync(string username, string? displayName, string[] roles)
+    public async Task<Guid> SyncUserAsync(string username, string? displayName, string[] roles, string providerId)
     {
         var user = _userManager.GetUserByName(username);
 
@@ -45,18 +45,16 @@ public class UserSyncService
 
             _logger.LogInformation("Created new OIDC user: {Username}", username);
         }
-
-        if (!string.IsNullOrWhiteSpace(displayName))
+        else
         {
-            // Only update if the display name is not already set or is different
-            // The User entity doesn't expose DisplayName directly; it's part of the DTO
-            // We skip display name update here as it requires additional API surface
+            // Enforce SSO as the only auth path so RBAC cannot be bypassed via local password
+            user.AuthenticationProviderId = typeof(Auth.OidcAuthProvider).FullName!;
         }
 
         user.SetPermission(PermissionKind.IsDisabled, false);
 
         await _userManager.UpdateUserAsync(user).ConfigureAwait(false);
-        await _rbacService.ApplyRoleMappingsAsync(user.Id, roles).ConfigureAwait(false);
+        await _rbacService.ApplyRoleMappingsAsync(user.Id, roles, providerId).ConfigureAwait(false);
 
         return user.Id;
     }

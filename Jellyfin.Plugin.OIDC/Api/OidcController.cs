@@ -143,13 +143,61 @@ public class OidcController : ControllerBase
             return BadRequest("Token exchange failed. Check plugin logs for details.");
         }
 
+        var tokenString = tokenResponse.IdentityToken;
+        if (string.IsNullOrEmpty(tokenString))
+        {
+            _logger.LogError("Identity token missing in token response from provider {Provider}", providerId);
+            return BadRequest("Identity token is missing");
+        }
+
         var handler = new JwtSecurityTokenHandler();
-        if (!handler.CanReadToken(tokenResponse.IdentityToken ?? tokenResponse.AccessToken))
+        if (!handler.CanReadToken(tokenString))
         {
             return BadRequest("Could not read identity token");
         }
 
-        var idToken = handler.ReadJwtToken(tokenResponse.IdentityToken ?? tokenResponse.AccessToken);
+        if (string.IsNullOrEmpty(disco.JwksUri))
+        {
+            _logger.LogError("JWKS URI missing from discovery document for provider {Provider}", providerId);
+            return StatusCode(502, "Failed to retrieve signing keys from identity provider");
+        }
+
+        JsonWebKeySet msKeySet;
+        try
+        {
+            var jwksJson = await httpClient.GetStringAsync(disco.JwksUri).ConfigureAwait(false);
+            msKeySet = new JsonWebKeySet(jwksJson);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "Failed to fetch JWKS from {JwksUri}", disco.JwksUri);
+            return StatusCode(502, "Failed to retrieve signing keys from identity provider");
+        }
+
+        var validationParameters = new TokenValidationParameters
+        {
+            ValidIssuer = disco.Issuer,
+            ValidAudience = provider.ClientId,
+            IssuerSigningKeys = msKeySet.GetSigningKeys(),
+            ValidateIssuer = true,
+            ValidateAudience = true,
+            ValidateLifetime = true,
+            ValidateIssuerSigningKey = true,
+            RequireSignedTokens = true,
+            ClockSkew = TimeSpan.FromSeconds(30)
+        };
+
+        JwtSecurityToken idToken;
+        try
+        {
+            handler.ValidateToken(tokenString, validationParameters, out var validatedToken);
+            idToken = (JwtSecurityToken)validatedToken;
+        }
+        catch (SecurityTokenException ex)
+        {
+            _logger.LogWarning("ID token validation failed for provider {Provider}: {Message}", providerId, ex.Message);
+            return BadRequest("Token validation failed");
+        }
 
         var nonceClaim = idToken.Claims.FirstOrDefault(c => c.Type == "nonce")?.Value;
         if (!string.IsNullOrEmpty(oidcState.Nonce) && nonceClaim != oidcState.Nonce)
@@ -171,7 +219,7 @@ public class OidcController : ControllerBase
 
         var displayName = ClaimParser.ExtractClaim(idToken, provider.DisplayNameClaim);
 
-        // Extract roles from both ID token and access token
+        // Extract roles from validated ID token; fall back to access token for non-standard IdPs
         var roles = ClaimParser.ExtractRoles(idToken, provider.RoleClaim);
         if (roles.Length == 0 && handler.CanReadToken(tokenResponse.AccessToken))
         {
@@ -214,7 +262,8 @@ public class OidcController : ControllerBase
             var userId = await _userSyncService.SyncUserAsync(
                 session.Username,
                 session.DisplayName,
-                session.Roles).ConfigureAwait(false);
+                session.Roles,
+                providerId).ConfigureAwait(false);
 
             var authRequest = new AuthenticationRequest
             {
