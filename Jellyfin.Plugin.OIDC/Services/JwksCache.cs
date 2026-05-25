@@ -12,7 +12,7 @@ namespace Jellyfin.Plugin.OIDC.Services;
 /// Thread-safe JWKS cache that fetches and caches JSON Web Key Sets by URI.
 /// Prevents hammering the IdP on every token validation; keys rotate infrequently.
 /// </summary>
-public sealed class JwksCache
+public sealed class JwksCache : IDisposable
 {
     /// <summary>
     /// Minimum gap between forced refreshes for a given JWKS URI when we hit an unknown <c>kid</c>.
@@ -28,6 +28,7 @@ public sealed class JwksCache
     private readonly ILogger<JwksCache> _logger;
     private readonly SemaphoreSlim _fetchLock = new(1, 1);
     private readonly TimeSpan _refreshGate;
+    private bool _disposed;
 
     public JwksCache(IHttpClientFactory httpClientFactory, ILogger<JwksCache> logger)
         : this(httpClientFactory, logger, TimeSpan.FromSeconds(MinimumRefreshIntervalSeconds))
@@ -49,6 +50,8 @@ public sealed class JwksCache
     /// </summary>
     public async Task<JsonWebKeySet> GetKeysAsync(string jwksUri, TimeSpan? ttl = null)
     {
+        ObjectDisposedException.ThrowIf(_disposed, this);
+
         var effectiveTtl = ttl ?? TimeSpan.FromHours(1);
 
         if (_cache.TryGetValue(jwksUri, out var cached) && cached.ExpiresAt > DateTime.UtcNow)
@@ -81,6 +84,8 @@ public sealed class JwksCache
     /// </summary>
     public async Task<JsonWebKeySet?> RefreshAsync(string jwksUri, TimeSpan? ttl = null)
     {
+        ObjectDisposedException.ThrowIf(_disposed, this);
+
         var effectiveTtl = ttl ?? TimeSpan.FromHours(1);
         var now = DateTime.UtcNow;
 
@@ -113,6 +118,17 @@ public sealed class JwksCache
 
     /// <summary>Removes the cached entry for the given URI, forcing a fresh fetch next time.</summary>
     public void Invalidate(string jwksUri) => _cache.TryRemove(jwksUri, out _);
+
+    public void Dispose()
+    {
+        if (_disposed)
+        {
+            return;
+        }
+
+        _disposed = true;
+        _fetchLock.Dispose();
+    }
 
     private async Task<JsonWebKeySet> FetchAndStoreAsync(string jwksUri, TimeSpan ttl)
     {
