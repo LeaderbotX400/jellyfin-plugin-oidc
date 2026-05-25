@@ -34,6 +34,7 @@ public static class ConfigMasking
             DefaultProvider = config.DefaultProvider,
             AutoCreateUsers = config.AutoCreateUsers,
             DefaultRoleName = config.DefaultRoleName,
+            VerboseClaimLogging = config.VerboseClaimLogging,
             RoleMappings = config.RoleMappings.Select(m => new RoleMapping
             {
                 RoleName = m.RoleName,
@@ -208,6 +209,13 @@ public class PluginConfiguration : BasePluginConfiguration
     /// have another way in). Reset to false after use.
     /// </summary>
     public bool AllowLastAdminDemotion { get; set; } = false;
+
+    /// <summary>
+    /// DANGER — enables full PII logging to the server log (role lists, sub values, email addresses).
+    /// Only enable temporarily for debugging. All other admins who can read server logs will be able
+    /// to see arbitrary group memberships and user identifiers. Default false.
+    /// </summary>
+    public bool VerboseClaimLogging { get; set; } = false;
 }
 
 /// <summary>

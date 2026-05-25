@@ -76,6 +76,15 @@ public static class EntitlementParser
             prefix = "jellyfin:";
         }
 
+        // IMPORTANT: The prefix match uses OrdinalIgnoreCase, and the token is extracted
+        // using raw byte index (raw[prefix.Length..]). This is correct ONLY when the
+        // prefix is entirely ASCII — because OrdinalIgnoreCase case-folds ASCII without
+        // changing byte lengths (A-Z ↔ a-z differ only in bit 5, always same byte count).
+        // If a non-ASCII prefix were configured, the substring index could be wrong.
+        // We document and enforce this: the EntitlementPrefix config field is expected to
+        // be ASCII (e.g. "jellyfin:", "myapp:"). Non-ASCII prefixes will produce
+        // unexpected behavior and are not supported. See unit tests for a non-ASCII case.
+
         var set = new EntitlementSet();
 
         foreach (var raw in entitlements)

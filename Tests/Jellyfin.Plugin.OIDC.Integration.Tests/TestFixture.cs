@@ -26,6 +26,7 @@ internal sealed class TestFixture
     public StateManager StateManager { get; }
     public LogoutTokenReplayCache ReplayCache { get; }
     public SamlAssertionReplayCache SamlReplayCache { get; }
+    public AuthorizationCodeCache CodeCache { get; }
 
     public TestFixture(MockIdpFixture idp)
     {
@@ -43,6 +44,7 @@ internal sealed class TestFixture
         StateManager = new StateManager(NullLogger<StateManager>.Instance);
         ReplayCache = new LogoutTokenReplayCache(NullLogger<LogoutTokenReplayCache>.Instance);
         SamlReplayCache = new SamlAssertionReplayCache(NullLogger<SamlAssertionReplayCache>.Instance);
+        CodeCache = new AuthorizationCodeCache(NullLogger<AuthorizationCodeCache>.Instance);
 
         RbacService = new RbacService(
             userManagerMock.Object,
@@ -69,6 +71,7 @@ internal sealed class TestFixture
             OidcUserStore,
             userManagerMock.Object,
             ConfigProvider,
+            CodeCache,
             NullLogger<OidcController>.Instance);
 
         Controller.ControllerContext = new ControllerContext
@@ -163,7 +166,10 @@ internal sealed class TestFixture
             nonce: nonce,
             useHmacSigning: useHmacSigning);
 
-        var callbackResult = await Controller.Callback("testidp", code: "test-code", state: state);
+        // Use a unique code per invocation so the one-time-use AuthorizationCodeCache
+        // does not reject the second call in multi-RunFullFlow test scenarios.
+        var code = $"test-code-{Guid.NewGuid():N}";
+        var callbackResult = await Controller.Callback("testidp", code: code, state: state);
         var content = (ContentResult)callbackResult;
         var token = ExtractSessionTokenFromHtml(content.Content!);
 
@@ -172,6 +178,23 @@ internal sealed class TestFixture
             Token = token,
             DeviceId = "test-dev"
         });
+    }
+
+    /// <summary>
+    /// Returns the raw callback HTML without completing /Auth. Used to assert on script
+    /// content (e.g. AppVersion).
+    /// </summary>
+    public async Task<string> RunFullFlowAndGetCallbackHtml(string username, string sub, string[]? roles = null)
+    {
+        var startResult = await Controller.Start("testidp");
+        var redirect = (RedirectResult)startResult;
+        var state = HttpUtility.ParseQueryString(new Uri(redirect.Url).Query)["state"]!;
+        var nonce = HttpUtility.ParseQueryString(new Uri(redirect.Url).Query)["nonce"]!;
+        PropagateCookies(Controller);
+        Idp.EnqueueTokenResponse(sub: sub, username: username, nonce: nonce, roles: roles);
+        var code = $"html-code-{Guid.NewGuid():N}";
+        var callbackResult = await Controller.Callback("testidp", code: code, state: state);
+        return ((ContentResult)callbackResult).Content ?? string.Empty;
     }
 
     /// <summary>

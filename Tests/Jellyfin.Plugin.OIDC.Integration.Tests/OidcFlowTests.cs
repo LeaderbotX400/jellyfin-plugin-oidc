@@ -239,6 +239,90 @@ public sealed class OidcFlowTests : IClassFixture<MockIdpFixture>
         Assert.Equal(1, after - before);
     }
 
+    [Fact]
+    public async Task Callback_MissingNonce_ReturnsBadRequest()
+    {
+        // When the IdP omits the nonce claim entirely, the controller must reject.
+        var fixture = new TestFixture(_idp);
+        fixture.AddProvider();
+
+        var startResult = await fixture.Controller.Start(ProviderId);
+        var redirect = Assert.IsType<RedirectResult>(startResult);
+        var stateValue = ExtractStateFromUrl(redirect.Url);
+        TestFixture.PropagateCookies(fixture.Controller);
+
+        // EnqueueTokenResponse without nonce: → no "nonce" claim in the ID token
+        _idp.EnqueueTokenResponse(sub: "no-nonce-sub", username: "no-nonce-user");
+
+        var callbackResult = await fixture.Controller.Callback(ProviderId, code: "code-no-nonce", state: stateValue);
+        Assert.IsType<BadRequestObjectResult>(callbackResult);
+    }
+
+    [Fact]
+    public async Task Callback_NonceMismatch_ReturnsBadRequest()
+    {
+        // When the IdP returns a nonce that doesn't match what we sent, the controller must reject.
+        var fixture = new TestFixture(_idp);
+        fixture.AddProvider();
+
+        var startResult = await fixture.Controller.Start(ProviderId);
+        var redirect = Assert.IsType<RedirectResult>(startResult);
+        var stateValue = ExtractStateFromUrl(redirect.Url);
+        TestFixture.PropagateCookies(fixture.Controller);
+
+        // Deliberately supply a wrong nonce value
+        _idp.EnqueueTokenResponse(sub: "mismatch-sub", username: "mismatch-user", nonce: "wrong-nonce-value");
+
+        var callbackResult = await fixture.Controller.Callback(ProviderId, code: "code-nonce-mismatch", state: stateValue);
+        Assert.IsType<BadRequestObjectResult>(callbackResult);
+    }
+
+    [Fact]
+    public async Task Callback_CodeReplayAttack_SecondCallReturnsBadRequest()
+    {
+        // Using the same authorization code twice must be rejected by the in-process code cache.
+        var fixture = new TestFixture(_idp);
+        fixture.AddProvider();
+
+        // First call — should succeed
+        var startResult1 = await fixture.Controller.Start(ProviderId);
+        var redirect1 = Assert.IsType<RedirectResult>(startResult1);
+        var state1 = ExtractStateFromUrl(redirect1.Url);
+        var nonce1 = ExtractParamFromUrl(redirect1.Url, "nonce");
+        TestFixture.PropagateCookies(fixture.Controller);
+
+        _idp.EnqueueTokenResponse(sub: "replay-sub", username: "replay-user", nonce: nonce1);
+        var firstResult = await fixture.Controller.Callback(ProviderId, code: "replay-code", state: state1);
+        Assert.IsType<ContentResult>(firstResult);
+
+        // Second call with same code on a fresh state — must be rejected
+        var startResult2 = await fixture.Controller.Start(ProviderId);
+        var redirect2 = Assert.IsType<RedirectResult>(startResult2);
+        var state2 = ExtractStateFromUrl(redirect2.Url);
+        var nonce2 = ExtractParamFromUrl(redirect2.Url, "nonce");
+        TestFixture.PropagateCookies(fixture.Controller);
+
+        _idp.EnqueueTokenResponse(sub: "replay-sub", username: "replay-user", nonce: nonce2);
+        var secondResult = await fixture.Controller.Callback(ProviderId, code: "replay-code", state: state2);
+        Assert.IsType<BadRequestObjectResult>(secondResult);
+    }
+
+    [Fact]
+    public async Task BuildCallbackHtml_AppVersionNotHardcoded()
+    {
+        // The callback HTML must embed a real plugin version or the fallback "0.0.0" —
+        // not the old hardcoded "10.11.0" string.
+        var fixture = new TestFixture(_idp);
+        fixture.AddProvider();
+
+        var html = await fixture.RunFullFlowAndGetCallbackHtml("version-user", "version-sub");
+
+        // Must NOT contain the old hardcoded string
+        Assert.DoesNotContain("10.11.0", html);
+        // Must contain AppVersion in the fetch body
+        Assert.Contains("AppVersion", html);
+    }
+
     // ────────────────────────────────────────────────────────────────────────
     // Helpers
     // ────────────────────────────────────────────────────────────────────────

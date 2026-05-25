@@ -1,5 +1,7 @@
 using System;
+using System.Collections.Generic;
 using Jellyfin.Plugin.OIDC.Configuration;
+using Jellyfin.Plugin.OIDC.Api;
 
 namespace Jellyfin.Plugin.OIDC.Services;
 
@@ -22,5 +24,14 @@ public static class ProviderConfigValidator
             provider.Authority,
             provider.AllowInsecureAuthority,
             $"Provider '{provider.ProviderId}' Authority");
+
+        // Validate AdditionalParameters at save time — reject reserved OIDC keys so that a
+        // misconfiguration is caught early rather than at the first login attempt.
+        if (!string.IsNullOrWhiteSpace(provider.AdditionalParameters))
+        {
+            // Reuse the same parse + rejection logic from OidcController to keep them in sync.
+            // ParseAdditionalParameters throws InvalidOperationException on reserved keys.
+            OidcController.ParseAdditionalParameters(provider.AdditionalParameters);
+        }
     }
 }

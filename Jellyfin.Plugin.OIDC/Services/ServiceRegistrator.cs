@@ -18,6 +18,8 @@ public class ServiceRegistrator : IPluginServiceRegistrator
         serviceCollection.AddHostedService(sp => sp.GetRequiredService<LogoutTokenReplayCache>());
         serviceCollection.AddSingleton<SamlAssertionReplayCache>();
         serviceCollection.AddHostedService(sp => sp.GetRequiredService<SamlAssertionReplayCache>());
+        serviceCollection.AddSingleton<AuthorizationCodeCache>();
+        serviceCollection.AddHostedService(sp => sp.GetRequiredService<AuthorizationCodeCache>());
         serviceCollection.AddSingleton<OidcUserStore>(sp => new OidcUserStore(
             sp.GetRequiredService<ILogger<OidcUserStore>>(),
             sp.GetRequiredService<IActivityManager>()));

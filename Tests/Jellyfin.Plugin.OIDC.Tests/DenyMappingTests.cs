@@ -236,6 +236,60 @@ public class DenyMappingTests
         Assert.True(m.MigratedDenyDefaults, "Migration sentinel must be set to prevent double-migration");
     }
 
+    // ── NFKC Unicode normalization tests (TASK-20) ────────────────────────────
+
+    /// <summary>
+    /// Helper that calls the real PermissionResolver (with NFKC normalization) directly,
+    /// bypassing the TestableRbacService which has its own simplified matching logic.
+    /// </summary>
+    private static PermissionPreview RealPreview(string[] roles, List<RoleMapping> mappings, string providerId = "")
+    {
+        var config = new ResolverConfig { RoleMappings = mappings };
+        return PermissionResolver.Resolve(roles, Array.Empty<string>(), providerId, config);
+    }
+
+    [Fact]
+    public void PermissionResolver_NfkcFullwidthChars_CollapseToAscii_DenyFires()
+    {
+        // Fullwidth "ａｄｍｉｎ" (U+FF41–U+FF4E) NFKC-normalizes to ASCII "admin".
+        // A deny mapping for "admin" should therefore fire.
+        var mappings = new List<RoleMapping>
+        {
+            new() { RoleName = "admin", IsAdmin = true },
+            new() { RoleName = "admin", IsAdmin = true, IsExplicitDeny = true }
+        };
+
+        // The user's role claim contains fullwidth latin small letters
+        var preview = RealPreview(new[] { "ａｄｍｉｎ" }, mappings);
+
+        // NFKC maps fullwidth "ａｄｍｉｎ" → "admin", so both grant and deny match
+        Assert.False(preview.IsAdmin, "Deny must fire after NFKC normalization of fullwidth chars");
+    }
+
+    [Fact]
+    public void PermissionResolver_DotlessI_RemainsDistinctFromAsciiI()
+    {
+        // Turkish dotless-i (U+0131 'ı') does NOT normalize to ASCII 'i' under NFKC —
+        // it stays as-is. A deny mapping for "admin" (with ASCII 'i') must NOT fire
+        // for a role containing dotless-i. This documents intentional behavior.
+        var mappings = new List<RoleMapping>
+        {
+            new() { RoleName = "admin", IsAdmin = true },
+            new() { RoleName = "admin", IsAdmin = true, IsExplicitDeny = true }
+        };
+
+        // "admın" = "admın" with dotless-i — distinct from "admin" even after NFKC
+        var preview = RealPreview(new[] { "admın" }, mappings);
+
+        // Neither grant nor deny matches. In the default (EntitlementsAuthoritative) mode
+        // the resolver returns false (not null) for unmatched booleans, so IsAdmin=false.
+        // The user does NOT get admin rights — this is the important invariant.
+        Assert.False(preview.IsAdmin);
+        // Also verify the deny mapping did NOT fire (MatchedDenyMappings is empty)
+        Assert.Empty(preview.MatchedDenyMappings);
+        Assert.Empty(preview.MatchedGrantMappings);
+    }
+
     // ── Test helper that exposes the two-pass grant/deny logic without Jellyfin DI ──
 
     private sealed class TestableRbacService

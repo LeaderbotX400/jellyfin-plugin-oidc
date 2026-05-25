@@ -8,6 +8,7 @@ using System.Threading.Tasks;
 using IdentityModel.Client;
 using Jellyfin.Plugin.OIDC.Configuration;
 using Jellyfin.Plugin.OIDC.Services;
+using static Jellyfin.Plugin.OIDC.Services.LogRedaction;
 using MediaBrowser.Controller.Session;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.Extensions.Logging;
@@ -285,8 +286,8 @@ public class OidcLogoutController : ControllerBase
         if (record == null)
         {
             _logger.LogInformation(
-                "Back-channel logout: target not found (sub={Sub}, sid={Sid}, provider={Provider}) — ignoring",
-                sub, sid, provider.ProviderId);
+                "Back-channel logout: target not found (sub={SubRedacted}, sid={SidRedacted}, provider={Provider}) — ignoring",
+                RedactSub(sub), RedactSub(sid), provider.ProviderId);
             return Ok();
         }
 
@@ -299,8 +300,8 @@ public class OidcLogoutController : ControllerBase
             await _sessionManager.RevokeUserTokens(record.UserId, null).ConfigureAwait(false);
 
             _logger.LogInformation(
-                "Back-channel logout: revoked sessions for user {Username} (sub={Sub}, sid={Sid}, path={Path})",
-                record.Username, sub, sid, revocationPath);
+                "Back-channel logout: revoked sessions for user {Username} (sub={SubRedacted}, sid={SidRedacted}, path={Path})",
+                record.Username, RedactSub(sub), RedactSub(sid), revocationPath);
 
             await _rbacService.LogActivityAsync(
                 $"OIDC back-channel logout: {record.Username}",
