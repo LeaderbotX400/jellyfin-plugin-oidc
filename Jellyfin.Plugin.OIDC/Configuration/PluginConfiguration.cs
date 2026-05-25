@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Text.Json.Serialization;
 using MediaBrowser.Model.Plugins;
 
 namespace Jellyfin.Plugin.OIDC.Configuration;
@@ -19,8 +20,10 @@ public class PluginConfiguration : BasePluginConfiguration
     public string DefaultRoleName { get; set; } = string.Empty;
 
     /// <summary>
-    /// Controls how RBAC writes apply to user records.
+    /// Controls how RBAC writes apply to user records. Serialized as the enum's string name so the
+    /// web UI can send/receive "EntitlementsAuthoritative" / "RespectExistingWhenUnspecified".
     /// </summary>
+    [JsonConverter(typeof(JsonStringEnumConverter))]
     public RbacBehaviorMode RbacBehavior { get; set; } = RbacBehaviorMode.EntitlementsAuthoritative;
 }
 
