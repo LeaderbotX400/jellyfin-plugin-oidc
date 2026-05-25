@@ -119,6 +119,7 @@ public class DenyMappingTests
                 EnableAllLibraries: merged.EnableAllLibraries && !(deny?.EnableAllLibraries ?? false),
                 Libraries: new List<string>(),
                 MaxParentalRating: null,
+                ClearMaxParentalRating: false,
                 MatchedGrantMappings: grantMappings.Select(m => m.RoleName).ToArray(),
                 MatchedDenyMappings: denyMappings.Select(m => m.RoleName).ToArray(),
                 ParsedEntitlements: entitlements);

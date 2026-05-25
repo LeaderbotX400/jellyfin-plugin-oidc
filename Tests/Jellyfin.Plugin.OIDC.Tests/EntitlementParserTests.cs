@@ -91,6 +91,27 @@ public class EntitlementParserTests
         Assert.True(set.HasAny);
     }
 
+    [Theory]
+    [InlineData("jellyfin:rating:unlimited")]
+    [InlineData("jellyfin:rating:none")]
+    [InlineData("jellyfin:rating:max")]
+    public void Parse_RatingUnlimited_SetsClearFlag(string token)
+    {
+        var set = EntitlementParser.Parse([token], "jellyfin:");
+        Assert.True(set.ClearMaxParentalRating);
+        Assert.Null(set.MaxParentalRating);
+        Assert.True(set.HasAny);
+    }
+
+    [Fact]
+    public void Parse_RatingUnlimited_OverridesNumericRating()
+    {
+        var set = EntitlementParser.Parse(["jellyfin:rating:13", "jellyfin:rating:unlimited"], "jellyfin:");
+        Assert.True(set.ClearMaxParentalRating);
+        // numeric still recorded so MaxParentalRating reflects what was claimed; downstream prefers Clear
+        Assert.Equal(13, set.MaxParentalRating);
+    }
+
     [Fact]
     public void Parse_AllPermissions_AreParsed()
     {

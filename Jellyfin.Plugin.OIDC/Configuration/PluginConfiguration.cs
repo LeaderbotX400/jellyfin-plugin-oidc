@@ -17,6 +17,30 @@ public class PluginConfiguration : BasePluginConfiguration
     public bool AutoCreateUsers { get; set; } = true;
 
     public string DefaultRoleName { get; set; } = string.Empty;
+
+    /// <summary>
+    /// Controls how RBAC writes apply to user records.
+    /// </summary>
+    public RbacBehaviorMode RbacBehavior { get; set; } = RbacBehaviorMode.EntitlementsAuthoritative;
+}
+
+/// <summary>
+/// Controls how the plugin reconciles computed permissions with the user's existing Jellyfin record.
+/// </summary>
+public enum RbacBehaviorMode
+{
+    /// <summary>
+    /// Plugin owns every covered permission. Anything not granted by entitlements or role mappings
+    /// is explicitly set off (or cleared) on every login. Backwards-compatible default.
+    /// </summary>
+    EntitlementsAuthoritative = 0,
+
+    /// <summary>
+    /// When entitlements are present they remain authoritative (matching the default mode).
+    /// When only role mappings matched, only fields explicitly opined on by a matched grant or deny
+    /// mapping are written — all other permissions on the user are left as Jellyfin has them.
+    /// </summary>
+    RespectExistingWhenUnspecified = 1,
 }
 
 public class OidcProviderConfig

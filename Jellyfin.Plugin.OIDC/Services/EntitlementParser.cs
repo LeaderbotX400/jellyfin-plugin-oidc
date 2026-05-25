@@ -25,6 +25,13 @@ public class EntitlementSet
     public HashSet<string> LibraryNames { get; } = new(StringComparer.OrdinalIgnoreCase);
     public int? MaxParentalRating { get; set; }
 
+    /// <summary>
+    /// True when an entitlement explicitly removed any parental-rating limit
+    /// (e.g. <c>jellyfin:rating:unlimited</c>). Causes the user's MaxParentalRatingScore
+    /// to be set to null. Takes precedence over numeric rating tokens.
+    /// </summary>
+    public bool ClearMaxParentalRating { get; set; }
+
     public bool HasAny { get; private set; }
 
     internal void MarkHasAny() => HasAny = true;
@@ -110,7 +117,11 @@ public static class EntitlementParser
                     else if (token.StartsWith("rating:", StringComparison.OrdinalIgnoreCase))
                     {
                         var ratingStr = token["rating:".Length..];
-                        if (int.TryParse(ratingStr, out var rating))
+                        if (ratingStr is "unlimited" or "none" or "max")
+                        {
+                            set.ClearMaxParentalRating = true;
+                        }
+                        else if (int.TryParse(ratingStr, out var rating))
                         {
                             // Take the most permissive (highest) rating if multiple specified
                             if (!set.MaxParentalRating.HasValue || rating > set.MaxParentalRating.Value)
