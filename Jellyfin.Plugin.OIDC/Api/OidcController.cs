@@ -263,15 +263,26 @@ public class OidcController : ControllerBase
         }
 
         // A.3 — apply claim transforms before role matching
+        var rawRoles = roles;
         roles = ClaimParser.ApplyTransforms(roles, provider.RoleTransforms);
 
         var entitlements = provider.EnableEntitlements
             ? ClaimParser.ExtractRoles(idToken, provider.EntitlementClaim)
             : Array.Empty<string>();
 
-        _logger.LogInformation(
-            "OIDC auth successful: user={Username}, roles=[{Roles}], entitlements={EntitlementCount}, provider={Provider}",
-            username, string.Join(", ", roles), entitlements.Length, providerId);
+        var transformCount = provider.RoleTransforms?.Count ?? 0;
+        if (transformCount > 0 && !rawRoles.SequenceEqual(roles, StringComparer.Ordinal))
+        {
+            _logger.LogInformation(
+                "OIDC auth successful: user={Username}, roles=[{Roles}] (raw=[{RawRoles}], transforms={TransformCount}), entitlements={EntitlementCount}, provider={Provider}",
+                username, string.Join(", ", roles), string.Join(", ", rawRoles), transformCount, entitlements.Length, providerId);
+        }
+        else
+        {
+            _logger.LogInformation(
+                "OIDC auth successful: user={Username}, roles=[{Roles}], entitlements={EntitlementCount}, provider={Provider}",
+                username, string.Join(", ", roles), entitlements.Length, providerId);
+        }
 
         var sessionToken = _stateManager.StoreAuthorizedSession(new AuthorizedSession
         {
