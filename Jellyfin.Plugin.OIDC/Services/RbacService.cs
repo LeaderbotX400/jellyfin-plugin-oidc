@@ -35,14 +35,33 @@ public class RbacService
         _logger = logger;
     }
 
-    public async Task ApplyRoleMappingsAsync(
+    /// <summary>
+    /// Applies role mappings using a pre-captured configuration snapshot.
+    /// Callers that process many users (e.g. the resync task) should capture the config once
+    /// and pass it here so that mid-run config changes do not produce inconsistent results.
+    /// </summary>
+    public Task ApplyRoleMappingsAsync(
+        Guid userId,
+        string[] userRoles,
+        string[] entitlements,
+        string providerId,
+        PluginConfiguration configSnapshot)
+        => ApplyRoleMappingsCoreAsync(userId, userRoles, entitlements, providerId, configSnapshot);
+
+    public Task ApplyRoleMappingsAsync(
         Guid userId,
         string[] userRoles,
         string[] entitlements,
         string providerId)
-    {
-        var config = _configProvider.GetConfiguration();
+        => ApplyRoleMappingsCoreAsync(userId, userRoles, entitlements, providerId, _configProvider.GetConfiguration());
 
+    private async Task ApplyRoleMappingsCoreAsync(
+        Guid userId,
+        string[] userRoles,
+        string[] entitlements,
+        string providerId,
+        PluginConfiguration config)
+    {
         var user = _userManager.GetUserById(userId);
         if (user == null)
         {
