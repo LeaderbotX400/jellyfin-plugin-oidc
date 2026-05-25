@@ -60,7 +60,8 @@ public sealed class StateManager : IHostedService, IDisposable
     private readonly ConcurrentDictionary<string, OidcState> _pendingStates = new(StringComparer.Ordinal);
     private readonly ConcurrentDictionary<string, AuthorizedSession> _authorizedSessions = new(StringComparer.Ordinal);
     private readonly ILogger<StateManager> _logger;
-    private Timer? _cleanupTimer;
+    private CancellationTokenSource? _cts;
+    private Task? _cleanupLoop;
 
     public StateManager(ILogger<StateManager> logger)
     {
@@ -151,22 +152,61 @@ public sealed class StateManager : IHostedService, IDisposable
 
     public Task StartAsync(CancellationToken cancellationToken)
     {
-        _cleanupTimer = new Timer(Cleanup, null, CleanupInterval, CleanupInterval);
+        _cts = new CancellationTokenSource();
+        _cleanupLoop = RunCleanupLoopAsync(_cts.Token);
         return Task.CompletedTask;
     }
 
-    public Task StopAsync(CancellationToken cancellationToken)
+    public async Task StopAsync(CancellationToken cancellationToken)
     {
-        _cleanupTimer?.Change(Timeout.Infinite, 0);
-        return Task.CompletedTask;
+        if (_cts is null)
+        {
+            return;
+        }
+
+        await _cts.CancelAsync().ConfigureAwait(false);
+
+        if (_cleanupLoop is not null)
+        {
+            try
+            {
+                await _cleanupLoop.ConfigureAwait(false);
+            }
+            catch (OperationCanceledException)
+            {
+                // expected on cancellation
+            }
+        }
     }
 
     public void Dispose()
     {
-        _cleanupTimer?.Dispose();
+        _cts?.Dispose();
     }
 
-    private void Cleanup(object? state)
+    /// <summary>Exposed internal for testing: runs one cleanup pass synchronously.</summary>
+    internal void RunCleanup()
+    {
+        Cleanup();
+    }
+
+    private async Task RunCleanupLoopAsync(CancellationToken ct)
+    {
+        using var timer = new PeriodicTimer(CleanupInterval);
+        while (await timer.WaitForNextTickAsync(ct).ConfigureAwait(false))
+        {
+            try
+            {
+                Cleanup();
+            }
+            catch (Exception ex)
+            {
+                _logger.LogWarning(ex, "StateManager cleanup failed");
+            }
+        }
+    }
+
+    private void Cleanup()
     {
         var now = DateTimeOffset.UtcNow;
 

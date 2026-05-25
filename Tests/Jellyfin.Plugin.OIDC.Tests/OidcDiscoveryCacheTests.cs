@@ -68,6 +68,115 @@ public class OidcDiscoveryCacheTests
         Assert.True(doc.IsError);
     }
 
+    [Fact]
+    public void Dispose_ReleasesSemaphores_NoObjectDisposedOnSubsequentDispose()
+    {
+        // Verify that Dispose completes without error and that a second Dispose is idempotent.
+        var cache = new OidcDiscoveryCache(
+            MakeFactory(_ => string.Empty),
+            NullLogger<OidcDiscoveryCache>.Instance);
+
+        cache.Dispose();
+
+        // Second dispose must not throw
+        var ex = Record.Exception(() => cache.Dispose());
+        Assert.Null(ex);
+    }
+
+    [Fact]
+    public async Task Dispose_SubsequentGetAsync_Throws()
+    {
+        var cache = new OidcDiscoveryCache(
+            MakeFactory(_ => BuildDiscoveryJson("https://idp.example")),
+            NullLogger<OidcDiscoveryCache>.Instance);
+
+        cache.Dispose();
+
+        await Assert.ThrowsAsync<ObjectDisposedException>(() =>
+            cache.GetAsync("https://idp.example"));
+    }
+
+    [Fact]
+    public async Task GetAsync_MultipleAuthorities_IsolatedConcurrency()
+    {
+        // Ensures that two authorities don't deadlock when they might share the same stripe.
+        // Both must complete successfully.
+        var authority1 = "https://idp1.example";
+        var authority2 = "https://idp2.example";
+
+        var cache = new OidcDiscoveryCache(
+            MakeFactory(req =>
+            {
+                var url = req.RequestUri?.ToString() ?? string.Empty;
+                var authority = url.Contains("idp1") ? authority1 : authority2;
+                return BuildDiscoveryJson(authority);
+            }),
+            NullLogger<OidcDiscoveryCache>.Instance);
+
+        var t1 = cache.GetAsync(authority1);
+        var t2 = cache.GetAsync(authority2);
+
+        var results = await Task.WhenAll(t1, t2);
+
+        Assert.False(results[0].IsError);
+        Assert.False(results[1].IsError);
+    }
+
+    [Fact]
+    public async Task GetAsync_SecondCall_ReturnsCached()
+    {
+        // IdentityModel's GetDiscoveryDocumentAsync fetches both the discovery document and the
+        // jwks_uri during its first call, so the first GetAsync causes multiple HTTP requests.
+        // The second GetAsync must produce zero additional requests (pure cache hit).
+        var authority = "https://idp.example";
+        int fetchCount = 0;
+        var cache = new OidcDiscoveryCache(
+            MakeFactory(_ =>
+            {
+                Interlocked.Increment(ref fetchCount);
+                return BuildDiscoveryJson(authority);
+            }),
+            NullLogger<OidcDiscoveryCache>.Instance);
+
+        await cache.GetAsync(authority);
+        var afterFirst = fetchCount;
+
+        await cache.GetAsync(authority);
+        var afterSecond = fetchCount;
+
+        // Second call must not have issued any new HTTP requests.
+        Assert.Equal(afterFirst, afterSecond);
+        Assert.True(afterFirst >= 1, "First call should have issued at least one HTTP request");
+    }
+
+    [Fact]
+    public async Task Invalidate_ForcesRefetch()
+    {
+        // After Invalidate, the next GetAsync must issue new HTTP requests rather than returning
+        // the stale cached entry.
+        var authority = "https://idp.example";
+        int fetchCount = 0;
+        var cache = new OidcDiscoveryCache(
+            MakeFactory(_ =>
+            {
+                Interlocked.Increment(ref fetchCount);
+                return BuildDiscoveryJson(authority);
+            }),
+            NullLogger<OidcDiscoveryCache>.Instance);
+
+        await cache.GetAsync(authority);
+        var afterFirst = fetchCount;
+
+        cache.Invalidate(authority);
+
+        await cache.GetAsync(authority);
+        var afterSecond = fetchCount;
+
+        // After invalidation a fresh fetch must have occurred.
+        Assert.True(afterSecond > afterFirst,
+            $"Expected more requests after Invalidate; got {afterFirst} then {afterSecond}");
+    }
+
     private static string BuildDiscoveryJson(string authority, string? tokenHost = null)
     {
         var host = tokenHost ?? authority;

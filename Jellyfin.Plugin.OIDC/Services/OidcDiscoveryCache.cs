@@ -13,15 +13,25 @@ namespace Jellyfin.Plugin.OIDC.Services;
 /// (and the implicit `/jwks` validation fetch that <see cref="HttpClientDiscoveryExtensions"/> performs)
 /// on every authorize/callback/logout request.
 /// </summary>
-public sealed class OidcDiscoveryCache
+/// <remarks>
+/// Concurrency is managed via a striped semaphore array (8 stripes hashed by authority) rather than one
+/// <c>SemaphoreSlim</c> per authority. This eliminates the unbounded-growth and never-disposed resource
+/// leak that a <c>ConcurrentDictionary&lt;string, SemaphoreSlim&gt;</c> would cause, at the cost of
+/// slightly more contention between authorities that hash to the same stripe — acceptable since the
+/// number of configured providers is small and the critical section is short (one HTTP fetch).
+/// </remarks>
+public sealed class OidcDiscoveryCache : IDisposable
 {
+    private const int StripeCount = 8;
+
     private sealed record CacheEntry(DiscoveryDocumentResponse Doc, DateTime ExpiresAt);
 
     private readonly ConcurrentDictionary<string, CacheEntry> _cache = new();
-    private readonly ConcurrentDictionary<string, SemaphoreSlim> _locks = new();
+    private readonly SemaphoreSlim[] _stripes;
     private readonly IHttpClientFactory _httpClientFactory;
     private readonly ILogger<OidcDiscoveryCache> _logger;
     private readonly bool _allowEndpointMismatch;
+    private bool _disposed;
 
     /// <summary>Production ctor: strict endpoint validation.</summary>
     public OidcDiscoveryCache(IHttpClientFactory httpClientFactory, ILogger<OidcDiscoveryCache> logger)
@@ -43,6 +53,12 @@ public sealed class OidcDiscoveryCache
         _httpClientFactory = httpClientFactory;
         _logger = logger;
         _allowEndpointMismatch = allowEndpointMismatch;
+
+        _stripes = new SemaphoreSlim[StripeCount];
+        for (var i = 0; i < StripeCount; i++)
+        {
+            _stripes[i] = new SemaphoreSlim(1, 1);
+        }
     }
 
     /// <summary>
@@ -57,6 +73,8 @@ public sealed class OidcDiscoveryCache
         bool allowInsecureAuthority = false,
         TimeSpan? ttl = null)
     {
+        ObjectDisposedException.ThrowIf(_disposed, this);
+
         SecurityValidation.EnsureSecureUrl(authority, allowInsecureAuthority, nameof(authority));
 
         var effectiveTtl = ttl ?? TimeSpan.FromHours(1);
@@ -66,9 +84,9 @@ public sealed class OidcDiscoveryCache
             return cached.Doc;
         }
 
-        // Per-authority lock so two providers don't block each other
-        var perAuthLock = _locks.GetOrAdd(authority, _ => new SemaphoreSlim(1, 1));
-        await perAuthLock.WaitAsync().ConfigureAwait(false);
+        // Select the stripe for this authority (stable hash, not cryptographic)
+        var stripe = _stripes[(uint)authority.GetHashCode() % StripeCount];
+        await stripe.WaitAsync().ConfigureAwait(false);
         try
         {
             if (_cache.TryGetValue(authority, out cached) && cached.ExpiresAt > DateTime.UtcNow)
@@ -106,10 +124,25 @@ public sealed class OidcDiscoveryCache
         }
         finally
         {
-            perAuthLock.Release();
+            stripe.Release();
         }
     }
 
     /// <summary>Drops the cached entry for the given authority, forcing a fresh fetch next call.</summary>
     public void Invalidate(string authority) => _cache.TryRemove(authority, out _);
+
+    public void Dispose()
+    {
+        if (_disposed)
+        {
+            return;
+        }
+
+        _disposed = true;
+
+        foreach (var stripe in _stripes)
+        {
+            stripe.Dispose();
+        }
+    }
 }
