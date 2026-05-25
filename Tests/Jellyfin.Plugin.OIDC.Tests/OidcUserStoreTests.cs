@@ -156,6 +156,42 @@ public class OidcUserStoreTests : IDisposable
         Assert.Null(found);
     }
 
+    [Fact]
+    public async Task GetLinksForUser_NoLinks_ReturnsEmptyList()
+    {
+        var store = MakeStore();
+        var links = await store.GetLinksForUserAsync(Guid.NewGuid());
+        Assert.NotNull(links);
+        Assert.Empty(links);
+    }
+
+    [Fact]
+    public async Task UnlinkAsync_UserWithNoLinks_IsIdempotent()
+    {
+        // Calling Unlink for a user who has no links must not throw.
+        var store = MakeStore();
+        var userId = Guid.NewGuid();
+        var ex = await Record.ExceptionAsync(() => store.UnlinkAsync(userId, "any-provider"));
+        Assert.Null(ex);
+    }
+
+    [Fact]
+    public async Task LinkAsync_MultipleLinksForSameUser_AllRetrievable()
+    {
+        var store = MakeStore();
+        var userId = Guid.NewGuid();
+
+        await store.LinkAsync(userId, "sub-x", "prov-x");
+        await store.LinkAsync(userId, "sub-y", "prov-y");
+        await store.LinkAsync(userId, "sub-z", "prov-z");
+
+        var links = await store.GetLinksForUserAsync(userId);
+        Assert.Equal(3, links.Count);
+        Assert.Contains(links, l => l.ProviderId == "prov-x" && l.Sub == "sub-x");
+        Assert.Contains(links, l => l.ProviderId == "prov-y" && l.Sub == "sub-y");
+        Assert.Contains(links, l => l.ProviderId == "prov-z" && l.Sub == "sub-z");
+    }
+
     // ── Atomic write tests ─────────────────────────────────────────────────
 
     [Fact]

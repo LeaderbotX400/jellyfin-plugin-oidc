@@ -232,6 +232,41 @@ public sealed class UserSyncServiceTests : IDisposable
     }
 
     [Fact]
+    public async Task AutoCreateDisabled_NoExistingUser_Throws()
+    {
+        // When AutoCreateUsers=false and there's no pre-existing user by that name,
+        // SyncUserAsync must throw rather than silently creating the account.
+        _config.Configuration.AutoCreateUsers = false;
+
+        await Assert.ThrowsAsync<InvalidOperationException>(() =>
+            _sync.SyncUserAsync(
+                "ghost-user", null, "sub-ghost",
+                Array.Empty<string>(), Array.Empty<string>(),
+                ProviderId, email: null, emailVerified: false));
+
+        // No user must have been created.
+        Assert.Null(_users.GetUserByName("ghost-user"));
+        // No link must have been stored.
+        Assert.Null(await _store.GetLinkedUserIdAsync("sub-ghost", ProviderId));
+    }
+
+    [Fact]
+    public async Task StaleLink_UserDeletedUnderTheLink_Throws()
+    {
+        // A sub→userId link exists in the store, but the referenced Jellyfin user was deleted.
+        // SyncUserAsync must refuse to silently rebind to a new or existing user.
+        var orphanId = Guid.NewGuid();
+        // Write a link directly without creating a User object — simulates external deletion.
+        await _store.LinkAsync(orphanId, "sub-deleted", ProviderId);
+
+        await Assert.ThrowsAsync<InvalidOperationException>(() =>
+            _sync.SyncUserAsync(
+                "any-username", null, "sub-deleted",
+                Array.Empty<string>(), Array.Empty<string>(),
+                ProviderId, email: null, emailVerified: false));
+    }
+
+    [Fact]
     public async Task AutoLinkByEmail_ExistingUserAlreadyOnOtherProvider_Throws()
     {
         // Defense in depth: even with the flag on and email match, a user that's already
