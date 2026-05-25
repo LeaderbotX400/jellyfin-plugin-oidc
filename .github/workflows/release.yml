@@ -29,7 +29,13 @@ jobs:
         run: echo "version=${GITHUB_REF_NAME#v}" >> "$GITHUB_OUTPUT"
 
       - name: Build
-        run: dotnet publish Jellyfin.Plugin.OIDC/Jellyfin.Plugin.OIDC.csproj -c Release -o dist
+        run: |
+          VERSION="${{ steps.version.outputs.version }}.0"
+          dotnet publish Jellyfin.Plugin.OIDC/Jellyfin.Plugin.OIDC.csproj \
+            -c Release -o dist \
+            -p:Version=$VERSION \
+            -p:AssemblyVersion=$VERSION \
+            -p:FileVersion=$VERSION
 
       - name: Package
         run: cd dist && zip ../oidc-rbac.zip *.dll meta.json
@@ -60,6 +66,31 @@ jobs:
         with:
           files: oidc-rbac.zip
           generate_release_notes: true
+
+      - name: Verify all manifest sourceUrls are reachable
+        run: |
+          # Guard against stale entries (deleted/renamed releases) silently
+          # poisoning the manifest. Fail the job before we commit if any
+          # listed asset 404s — including the one we just published, which
+          # catches GitHub's release-asset propagation lag.
+          fail=0
+          for url in $(jq -r '.[0].versions[].sourceUrl' manifest.json); do
+            for attempt in 1 2 3; do
+              code=$(curl -sL -o /dev/null -w '%{http_code}' --max-time 15 "$url" || echo 000)
+              if [ "$code" = "200" ]; then
+                echo "OK  $url"
+                break
+              fi
+              if [ "$attempt" -lt 3 ]; then
+                echo "retry $attempt: $code $url"
+                sleep $((attempt * 3))
+              else
+                echo "::error::Unreachable ($code): $url"
+                fail=1
+              fi
+            done
+          done
+          exit $fail
 
       - name: Commit updated manifest
         run: |

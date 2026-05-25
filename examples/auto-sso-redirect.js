@@ -1,0 +1,103 @@
+/*
+ * Jellyfin OIDC — auto-redirect to authentik on the login page.
+ * Designed for the "JS Injector" Jellyfin plugin (script runs on every page).
+ *
+ * Loop protection:
+ *   - Skips on any /sso/OIDC/* path (so the callback page can finish its work).
+ *   - Bails if URL contains ?nosso=1 — manual escape hatch, bookmark
+ *     https://your-jellyfin/web/?nosso=1#/login.html if you ever get stuck.
+ *   - sessionStorage attempt counter: >= MAX_ATTEMPTS inside COOLDOWN_MS = stop
+ *     auto-redirecting and show a manual fallback link.
+ *   - Cleared once a valid Jellyfin session is detected.
+ */
+(function () {
+  'use strict';
+
+  var PROVIDER_ID  = 'authentik';
+  var START_URL    = '/sso/OIDC/Start/' + PROVIDER_ID;
+  var COOLDOWN_MS  = 60 * 1000;
+  var MAX_ATTEMPTS = 2;
+  var STORAGE_KEY  = 'oidc-auto-sso';
+
+  // Never run on the OIDC routes themselves — the callback page sets
+  // credentials then redirects to '/'. Interfering here causes real loops.
+  if (/^\/sso\/OIDC\//i.test(location.pathname)) return;
+
+  function onLoginRoute() {
+    // Jellyfin-web is a hash-routed SPA: #/login.html, sometimes with ?serverid=...
+    return /(^|#)\/?login\.html\b/i.test(location.hash || '');
+  }
+
+  function hasSession() {
+    try {
+      var raw = localStorage.getItem('jellyfin_credentials');
+      if (!raw) return false;
+      var parsed = JSON.parse(raw);
+      return !!(parsed && parsed.Servers && parsed.Servers.some(function (s) { return s.AccessToken; }));
+    } catch (e) { return false; }
+  }
+
+  function userBailed() {
+    return /[?&]nosso=1\b/.test(location.search);
+  }
+
+  function readState() {
+    try { return JSON.parse(sessionStorage.getItem(STORAGE_KEY)) || { n: 0, t: 0 }; }
+    catch (e) { return { n: 0, t: 0 }; }
+  }
+  function writeState(s) {
+    try { sessionStorage.setItem(STORAGE_KEY, JSON.stringify(s)); } catch (e) {}
+  }
+  function clearState() {
+    try { sessionStorage.removeItem(STORAGE_KEY); } catch (e) {}
+  }
+
+  function tooManyAttempts() {
+    var s = readState();
+    if (Date.now() - s.t > COOLDOWN_MS) return false;
+    return s.n >= MAX_ATTEMPTS;
+  }
+  function recordAttempt() {
+    var s = readState();
+    var now = Date.now();
+    if (now - s.t > COOLDOWN_MS) s.n = 0;
+    s.n += 1;
+    s.t = now;
+    writeState(s);
+  }
+
+  function showFallback() {
+    if (document.getElementById('oidc-auto-sso-notice')) return;
+    var div = document.createElement('div');
+    div.id = 'oidc-auto-sso-notice';
+    div.style.cssText = 'margin:1em auto;padding:0.8em 1em;max-width:420px;background:#332;color:#fda;border-radius:4px;text-align:center;font-size:0.9em;position:relative;z-index:9999;';
+    var msg = document.createElement('div');
+    msg.textContent = 'Automatic SSO is paused (loop detected or manually skipped).';
+    var a = document.createElement('a');
+    a.href = START_URL;
+    a.textContent = 'Sign in with ' + PROVIDER_ID;
+    a.style.cssText = 'display:inline-block;margin-top:0.5em;color:#9cf;text-decoration:underline;';
+    a.addEventListener('click', function () { clearState(); });
+    div.appendChild(msg);
+    div.appendChild(a);
+    (document.body || document.documentElement).appendChild(div);
+  }
+
+  function maybeRedirect() {
+    if (hasSession()) { clearState(); return; }
+    if (!onLoginRoute()) return;
+    if (userBailed()) { showFallback(); return; }
+    if (tooManyAttempts()) { showFallback(); return; }
+
+    recordAttempt();
+    location.replace(START_URL);
+  }
+
+  if (document.readyState === 'loading') {
+    document.addEventListener('DOMContentLoaded', maybeRedirect, { once: true });
+  } else {
+    maybeRedirect();
+  }
+  // SPA navigation into #/login.html after the page is already loaded.
+  window.addEventListener('hashchange', maybeRedirect);
+})();

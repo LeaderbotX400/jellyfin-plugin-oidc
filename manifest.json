@@ -22,22 +22,6 @@
         "sourceUrl": "https://github.com/LeaderbotX400/jellyfin-plugin-oidc/releases/download/v0.1.0/oidc-rbac.zip",
         "checksum": "11bb17d1ab64a8c44c2ff05c7a4e30d9",
         "timestamp": "2026-05-25T13:08:46Z"
-      },
-      {
-        "version": "1.1.1.0",
-        "changelog": "Release v1.1.1",
-        "targetAbi": "10.11.0.0",
-        "sourceUrl": "https://github.com/LeaderbotX400/jellyfin-plugin-oidc/releases/download/v1.1.1/oidc-rbac.zip",
-        "checksum": "deb15c4a410d85988bb879cf735d281b",
-        "timestamp": "2026-05-25T04:41:41Z"
-      },
-      {
-        "version": "1.1.0.0",
-        "changelog": "Release v1.1.0",
-        "targetAbi": "10.11.0.0",
-        "sourceUrl": "https://github.com/LeaderbotX400/jellyfin-plugin-oidc/releases/download/v1.1.0/oidc-rbac.zip",
-        "checksum": "c65048a247ff95e853e7234ad3e936d8",
-        "timestamp": "2026-05-25T04:27:03Z"
       }
     ]
   }
