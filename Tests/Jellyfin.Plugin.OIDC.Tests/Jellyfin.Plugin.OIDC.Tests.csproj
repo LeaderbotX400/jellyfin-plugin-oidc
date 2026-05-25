@@ -16,6 +16,8 @@
     </PackageReference>
     <PackageReference Include="Moq" Version="4.20.72" />
     <PackageReference Include="Microsoft.Extensions.Logging.Abstractions" Version="9.0.10" />
+    <!-- Pull Jellyfin runtime assemblies so we can instantiate PluginConfiguration in unit tests -->
+    <PackageReference Include="Jellyfin.Model" Version="10.11.3" />
   </ItemGroup>
 
   <ItemGroup>

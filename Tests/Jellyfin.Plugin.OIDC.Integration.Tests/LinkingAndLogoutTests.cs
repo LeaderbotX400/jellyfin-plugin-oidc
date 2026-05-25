@@ -48,6 +48,7 @@ public sealed class LinkingAndLogoutTests : IClassFixture<MockIdpFixture>
         var redirect = Assert.IsType<RedirectResult>(startResult);
         var state = HttpUtility.ParseQueryString(new Uri(redirect.Url).Query)["state"]!;
         var nonce = HttpUtility.ParseQueryString(new Uri(redirect.Url).Query)["nonce"]!;
+        TestFixture.PropagateCookies(fixture.Controller);
 
         // IdP returns token for a DIFFERENT user identity (oidc sub != existing username)
         _idp.EnqueueTokenResponse(
@@ -231,12 +232,6 @@ public sealed class LinkingAndLogoutTests : IClassFixture<MockIdpFixture>
         controller.ControllerContext.HttpContext.User = new ClaimsPrincipal(identity);
     }
 
-    private static string ExtractSessionToken(ContentResult content)
-    {
-        const string marker = "const token = '";
-        var idx = content.Content!.IndexOf(marker, StringComparison.Ordinal);
-        var start = idx + marker.Length;
-        var end = content.Content.IndexOf('\'', start);
-        return content.Content.Substring(start, end - start);
-    }
+    private static string ExtractSessionToken(ContentResult content) =>
+        TestFixture.ExtractSessionTokenFromHtml(content.Content ?? string.Empty);
 }

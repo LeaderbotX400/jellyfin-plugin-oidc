@@ -40,6 +40,7 @@ public sealed class OidcFlowTests : IClassFixture<MockIdpFixture>
         var redirect = Assert.IsType<RedirectResult>(startResult);
         var stateValue = ExtractStateFromUrl(redirect.Url);
         var nonceValue = ExtractParamFromUrl(redirect.Url, "nonce");
+        TestFixture.PropagateCookies(fixture.Controller);
 
         // Step 2: IdP "redirects back" — we drive the callback directly
         _idp.EnqueueTokenResponse(
@@ -126,6 +127,7 @@ public sealed class OidcFlowTests : IClassFixture<MockIdpFixture>
         var redirect = Assert.IsType<RedirectResult>(startResult);
         var stateValue = ExtractStateFromUrl(redirect.Url);
         var nonceValue = ExtractParamFromUrl(redirect.Url, "nonce");
+        TestFixture.PropagateCookies(fixture.Controller);
 
         _idp.EnqueueTokenResponse(
             sub: "user-x",
@@ -223,14 +225,6 @@ public sealed class OidcFlowTests : IClassFixture<MockIdpFixture>
         return query[name] ?? throw new InvalidOperationException($"Missing '{name}' in {url}");
     }
 
-    private static string ExtractSessionTokenFromCallbackHtml(ContentResult content)
-    {
-        var html = content.Content ?? string.Empty;
-        const string marker = "const token = '";
-        var idx = html.IndexOf(marker, StringComparison.Ordinal);
-        Assert.True(idx >= 0, "Session token marker not found in callback HTML");
-        var start = idx + marker.Length;
-        var end = html.IndexOf('\'', start);
-        return html.Substring(start, end - start);
-    }
+    private static string ExtractSessionTokenFromCallbackHtml(ContentResult content) =>
+        TestFixture.ExtractSessionTokenFromHtml(content.Content ?? string.Empty);
 }

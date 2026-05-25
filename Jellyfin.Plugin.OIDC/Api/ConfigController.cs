@@ -3,6 +3,7 @@ using System.Linq;
 using System.Net.Http;
 using System.Threading.Tasks;
 using IdentityModel.Client;
+using Jellyfin.Plugin.OIDC.Configuration;
 using Jellyfin.Plugin.OIDC.Services;
 using MediaBrowser.Common.Api;
 using Microsoft.AspNetCore.Authorization;
@@ -61,6 +62,58 @@ public class ConfigController : ControllerBase
             RoleMappingCount = config.RoleMappings.Count,
             EnabledProviders = config.Providers.Where(p => p.Enabled).Select(p => p.DisplayName).ToList()
         });
+    }
+
+    /// <summary>
+    /// Validates a candidate plugin configuration before the admin commits it. The UI calls this
+    /// from its Save handler; the real save still goes through Jellyfin's standard plugin config
+    /// API, where <see cref="OidcPlugin.UpdateConfiguration"/> enforces the same rules as a
+    /// last line of defence. The primary thing being enforced here is the provider id charset —
+    /// because provider ids are interpolated into URLs and (defence-in-depth) into JS string
+    /// literals in the callback HTML.
+    /// </summary>
+    [HttpPost("Validate")]
+    public ActionResult Validate([FromBody] PluginConfiguration config)
+    {
+        var errors = ValidateConfiguration(config);
+        if (errors.Count > 0)
+        {
+            return BadRequest(new { Errors = errors });
+        }
+
+        return Ok(new { Valid = true });
+    }
+
+    internal static List<string> ValidateConfiguration(PluginConfiguration? config)
+    {
+        var errors = new List<string>();
+        if (config == null)
+        {
+            errors.Add("Configuration body is required");
+            return errors;
+        }
+
+        foreach (var p in config.Providers ?? new List<OidcProviderConfig>())
+        {
+            if (!ProviderIdValidation.IsValid(p.ProviderId))
+            {
+                errors.Add(
+                    $"OIDC provider '{p.DisplayName}' has invalid ProviderId '{p.ProviderId}'. "
+                    + $"Must be {ProviderIdValidation.CharsetDescription}.");
+            }
+        }
+
+        foreach (var p in config.SamlProviders ?? new List<SamlProviderConfig>())
+        {
+            if (!ProviderIdValidation.IsValid(p.Id))
+            {
+                errors.Add(
+                    $"SAML provider '{p.DisplayName}' has invalid Id '{p.Id}'. "
+                    + $"Must be {ProviderIdValidation.CharsetDescription}.");
+            }
+        }
+
+        return errors;
     }
 
     [HttpPost("TestProvider")]

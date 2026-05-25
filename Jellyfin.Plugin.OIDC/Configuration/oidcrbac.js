@@ -524,6 +524,24 @@ export default function (view) {
         cfg.DefaultRoleName = gval(view, 'defaultRoleName');
         cfg.AutoCreateUsers = gchk(view, 'autoCreateUsers');
         cfg.RbacBehavior = view.querySelector('#rbacBehavior').value || 'EntitlementsAuthoritative';
+
+        // Client-side provider id check — must match server regex ^[A-Za-z0-9_-]{1,64}$.
+        // The server's UpdateConfiguration validates again as the source of truth; this just
+        // gives a faster, friendlier error message before the round-trip.
+        var providerIdPattern = /^[A-Za-z0-9_-]{1,64}$/;
+        var badProviders = (cfg.Providers || [])
+            .filter(function (p) { return !providerIdPattern.test(p.ProviderId || ''); })
+            .map(function (p) { return p.DisplayName || '(unnamed)'; });
+        var badSaml = (cfg.SamlProviders || [])
+            .filter(function (p) { return !providerIdPattern.test(p.Id || ''); })
+            .map(function (p) { return p.DisplayName || '(unnamed)'; });
+        if (badProviders.length || badSaml.length) {
+            Dashboard.hideLoadingMsg();
+            var names = badProviders.concat(badSaml).join(', ');
+            Dashboard.alert('Provider id must be letters, digits, underscore, or hyphen (1-64 chars). Fix: ' + names);
+            return;
+        }
+
         ApiClient.updatePluginConfiguration(pluginId, cfg).then(function (result) {
             Dashboard.processPluginConfigurationUpdateResult(result);
             Dashboard.hideLoadingMsg();

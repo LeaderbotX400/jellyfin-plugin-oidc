@@ -1,5 +1,6 @@
 using System;
 using System.Linq;
+using System.Text.Json;
 using System.Threading.Tasks;
 using Jellyfin.Plugin.OIDC.Configuration;
 using Jellyfin.Plugin.OIDC.Saml;
@@ -132,7 +133,17 @@ public class SamlController : ControllerBase
             Entitlements = Array.Empty<string>()
         });
 
+        SetCallbackSecurityHeaders();
         return Content(BuildCallbackHtml(sessionToken, providerId), "text/html");
+    }
+
+    private void SetCallbackSecurityHeaders()
+    {
+        // See OidcController.SetCallbackSecurityHeaders for the full rationale on 'unsafe-inline'.
+        Response.Headers["Content-Security-Policy"] =
+            "default-src 'none'; script-src 'unsafe-inline'; connect-src 'self'; style-src 'unsafe-inline'";
+        Response.Headers["X-Content-Type-Options"] = "nosniff";
+        Response.Headers["Referrer-Policy"] = "no-referrer";
     }
 
     /// <summary>Completes SAML authentication by exchanging the session token for a Jellyfin auth token.</summary>
@@ -211,6 +222,9 @@ public class SamlController : ControllerBase
 
     private static string BuildCallbackHtml(string sessionToken, string providerId)
     {
+        // JSON-encode every value crossing into <script> — see OidcController.BuildCallbackHtml.
+        var encodedToken = JsonSerializer.Serialize(sessionToken);
+        var encodedProvider = JsonSerializer.Serialize(providerId);
         return $$"""
         <!DOCTYPE html>
         <html>
@@ -220,12 +234,12 @@ public class SamlController : ControllerBase
         <p id="status">Please wait...</p>
         <script>
         (function() {
-            const token = '{{sessionToken}}';
-            const providerId = '{{providerId}}';
+            const token = {{encodedToken}};
+            const providerId = {{encodedProvider}};
             const deviceId = localStorage.getItem('_deviceId2') || crypto.randomUUID();
             localStorage.setItem('_deviceId2', deviceId);
 
-            fetch('/sso/SAML/Auth/' + providerId, {
+            fetch('/sso/SAML/Auth/' + encodeURIComponent(providerId), {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({ Token: token })

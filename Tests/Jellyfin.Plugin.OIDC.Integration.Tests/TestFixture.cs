@@ -142,6 +142,7 @@ internal sealed class TestFixture
         var redirect = (RedirectResult)startResult;
         var state = HttpUtility.ParseQueryString(new Uri(redirect.Url).Query)["state"]!;
         var nonce = HttpUtility.ParseQueryString(new Uri(redirect.Url).Query)["nonce"]!;
+        PropagateCookies(Controller);
 
         Idp.EnqueueTokenResponse(
             sub: sub,
@@ -155,18 +156,70 @@ internal sealed class TestFixture
 
         var callbackResult = await Controller.Callback("testidp", code: "test-code", state: state);
         var content = (ContentResult)callbackResult;
-
-        const string marker = "const token = '";
-        var idx = content.Content!.IndexOf(marker, StringComparison.Ordinal);
-        var startIdx = idx + marker.Length;
-        var endIdx = content.Content.IndexOf('\'', startIdx);
-        var token = content.Content.Substring(startIdx, endIdx - startIdx);
+        var token = ExtractSessionTokenFromHtml(content.Content!);
 
         await Controller.Authenticate("testidp", new AuthenticateRequest
         {
             Token = token,
             DeviceId = "test-dev"
         });
+    }
+
+    /// <summary>
+    /// Copies Set-Cookie headers written by the previous response into the next request,
+    /// so a chained controller call sees the browser-bound CSRF cookie.
+    /// </summary>
+    public static void PropagateCookies(Microsoft.AspNetCore.Mvc.ControllerBase controller)
+    {
+        var ctx = controller.ControllerContext.HttpContext;
+        var setCookies = ctx.Response.Headers["Set-Cookie"];
+        if (setCookies.Count == 0)
+        {
+            return;
+        }
+
+        // Parse name=value (drop attributes) from each Set-Cookie and merge into Request.Cookies.
+        // Replace the whole HttpContext.Request.Cookies via the standard "Cookie" header.
+        var existing = ctx.Request.Headers.TryGetValue("Cookie", out var cur)
+            ? cur.ToString().Split("; ", StringSplitOptions.RemoveEmptyEntries).ToList()
+            : new System.Collections.Generic.List<string>();
+
+        foreach (var sc in setCookies)
+        {
+            if (string.IsNullOrEmpty(sc)) continue;
+            var firstAttr = sc.Split(';')[0];
+            if (string.IsNullOrWhiteSpace(firstAttr)) continue;
+            var eq = firstAttr.IndexOf('=');
+            if (eq < 0) continue;
+            var name = firstAttr.Substring(0, eq);
+            // If Set-Cookie expired the cookie (Max-Age=0 / Expires past), drop matching entry.
+            if (sc.Contains("Max-Age=0") || sc.Contains("expires=Thu, 01 Jan 1970", StringComparison.OrdinalIgnoreCase))
+            {
+                existing.RemoveAll(c => c.StartsWith(name + "=", StringComparison.Ordinal));
+                continue;
+            }
+            existing.RemoveAll(c => c.StartsWith(name + "=", StringComparison.Ordinal));
+            existing.Add(firstAttr);
+        }
+
+        ctx.Request.Headers["Cookie"] = string.Join("; ", existing);
+        ctx.Response.Headers.Remove("Set-Cookie");
+    }
+
+    /// <summary>
+    /// Extracts the session token written into the callback HTML by either controller.
+    /// The token is now JSON-encoded (double-quoted) — supports both forms in case of regression.
+    /// </summary>
+    public static string ExtractSessionTokenFromHtml(string html)
+    {
+        const string marker = "const token = ";
+        var idx = html.IndexOf(marker, StringComparison.Ordinal);
+        if (idx < 0) throw new InvalidOperationException("Token marker not found in callback HTML");
+        var start = idx + marker.Length;
+        var quote = html[start];
+        if (quote != '"' && quote != '\'') throw new InvalidOperationException("Expected quoted token literal");
+        var end = html.IndexOf(quote, start + 1);
+        return html.Substring(start + 1, end - start - 1);
     }
 
     private static DefaultHttpContext BuildHttpContext()
