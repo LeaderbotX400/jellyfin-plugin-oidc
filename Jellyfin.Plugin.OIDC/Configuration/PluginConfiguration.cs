@@ -241,6 +241,25 @@ public class OidcProviderConfig
 
     /// <summary>Transforms applied to extracted roles before matching against RoleMappings.</summary>
     public List<ClaimTransform> RoleTransforms { get; set; } = new();
+
+    /// <summary>
+    /// When true, an OIDC login whose username matches an existing local Jellyfin user may
+    /// auto-link to that user — but ONLY if the id_token's <c>email_verified</c> claim is
+    /// <c>true</c> and the <c>email</c> claim matches the existing user's Jellyfin Username
+    /// (case-insensitive). The existing user must not already be bound to another auth provider.
+    /// Default false. With this off, name collisions are rejected and an admin must link manually.
+    /// </summary>
+    public bool AutoLinkByVerifiedEmail { get; set; }
+
+    /// <summary>
+    /// When true, on a successful auto-link via <see cref="AutoLinkByVerifiedEmail"/>, the linked
+    /// Jellyfin user is converted to OIDC-only authentication (local password disabled).
+    /// Default false — auto-link preserves the original AuthenticationProviderId.
+    /// </summary>
+    public bool EnforceSsoOnLink { get; set; }
+
+    /// <summary>OIDC claim name carrying the user's email address. Used by AutoLinkByVerifiedEmail.</summary>
+    public string EmailClaim { get; set; } = "email";
 }
 
 /// <summary>Maps a raw claim value to a normalized value before role matching.</summary>

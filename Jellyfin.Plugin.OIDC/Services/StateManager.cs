@@ -31,6 +31,12 @@ public sealed class AuthorizedSession
 
     /// <summary>Present when this session is for account linking rather than normal login.</summary>
     public Guid? LinkUserId { get; init; }
+
+    /// <summary>Email claim from the id_token (for AutoLinkByVerifiedEmail policy).</summary>
+    public string? Email { get; init; }
+
+    /// <summary>Whether the id_token asserted email_verified=true.</summary>
+    public bool EmailVerified { get; init; }
 }
 
 public sealed class StateManager : IHostedService, IDisposable

@@ -228,14 +228,17 @@ public class OidcController : ControllerBase
         }
 
         // A.1 — email_verified enforcement
+        var emailVerifiedClaim = ClaimParser.ExtractClaim(idToken, "email_verified");
+        var emailVerified = string.Equals(emailVerifiedClaim, "true", StringComparison.OrdinalIgnoreCase);
+        var emailClaim = ClaimParser.ExtractClaim(idToken, provider.EmailClaim);
+
         if (provider.RequireEmailVerified)
         {
-            var emailVerified = ClaimParser.ExtractClaim(idToken, "email_verified");
-            if (!string.Equals(emailVerified, "true", StringComparison.OrdinalIgnoreCase))
+            if (!emailVerified)
             {
                 _logger.LogWarning(
                     "OIDC login rejected: email_verified={Value} for provider {Provider}",
-                    emailVerified, providerId);
+                    emailVerifiedClaim, providerId);
                 return Unauthorized("Email address is not verified. Please verify your email with the identity provider.");
             }
         }
@@ -292,7 +295,9 @@ public class OidcController : ControllerBase
             Sub = sub,
             Roles = roles,
             Entitlements = entitlements,
-            LinkUserId = oidcState.LinkingForUserId
+            LinkUserId = oidcState.LinkingForUserId,
+            Email = emailClaim,
+            EmailVerified = emailVerified
         });
 
         return Content(BuildCallbackHtml(sessionToken, providerId), "text/html");
@@ -333,7 +338,9 @@ public class OidcController : ControllerBase
                 session.Sub,
                 session.Roles,
                 session.Entitlements,
-                providerId).ConfigureAwait(false);
+                providerId,
+                session.Email,
+                session.EmailVerified).ConfigureAwait(false);
 
             var authRequest = new AuthenticationRequest
             {
@@ -354,6 +361,23 @@ public class OidcController : ControllerBase
                 Microsoft.Extensions.Logging.LogLevel.Information).ConfigureAwait(false);
 
             return Ok(authResult);
+        }
+        catch (OidcUsernameCollisionException ex)
+        {
+            _logger.LogWarning(
+                "OIDC login rejected: name collision for '{Username}' (provider={Provider})",
+                ex.Username, providerId);
+            await _rbacService.LogActivityAsync(
+                $"OIDC login rejected: name collision for '{ex.Username}'",
+                "OidcLoginNameCollision",
+                Guid.Empty,
+                $"Provider: {providerId}",
+                Microsoft.Extensions.Logging.LogLevel.Warning).ConfigureAwait(false);
+            return Conflict(new
+            {
+                error = "name_collision",
+                message = ex.Message
+            });
         }
         catch (OidcUserStoreUnavailableException ex)
         {
@@ -575,6 +599,11 @@ public class OidcController : ControllerBase
                 })
             })
             .then(function(r) {
+                if (r.status === 409) {
+                    return r.json().then(function(body) {
+                        throw new Error(body && body.message ? body.message : 'Account collision');
+                    });
+                }
                 if (!r.ok) throw new Error('Auth failed: ' + r.status);
                 return r.json();
             })
