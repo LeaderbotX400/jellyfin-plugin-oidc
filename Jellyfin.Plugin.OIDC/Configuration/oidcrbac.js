@@ -437,6 +437,8 @@ export default function (view) {
             view.querySelector('#defaultRoleName').value = cfg.DefaultRoleName || '';
             view.querySelector('#autoCreateUsers').checked = cfg.AutoCreateUsers !== false;
             view.querySelector('#rbacBehavior').value = cfg.RbacBehavior || 'EntitlementsAuthoritative';
+            var alEl = view.querySelector('#allowLastAdminDemotion');
+            if (alEl) alEl.checked = cfg.AllowLastAdminDemotion === true;
             Dashboard.hideLoadingMsg();
         }).catch(function (err) {
             Dashboard.hideLoadingMsg();
@@ -524,7 +526,32 @@ export default function (view) {
         cfg.DefaultRoleName = gval(view, 'defaultRoleName');
         cfg.AutoCreateUsers = gchk(view, 'autoCreateUsers');
         cfg.RbacBehavior = view.querySelector('#rbacBehavior').value || 'EntitlementsAuthoritative';
-        ApiClient.updatePluginConfiguration(pluginId, cfg).then(function (result) {
+        cfg.AllowLastAdminDemotion = gchk(view, 'allowLastAdminDemotion');
+
+        // Run config validation before saving. Warnings are non-blocking — save proceeds regardless,
+        // but any warnings are shown prominently so the admin can make an informed decision.
+        ApiClient.ajax({
+            type: 'POST',
+            url: ApiClient.getUrl('sso/OIDC/Config/ValidateConfig'),
+            data: JSON.stringify(cfg),
+            contentType: 'application/json',
+            dataType: 'json'
+        }).then(function (validation) {
+            var warnings = (validation && validation.Warnings) || [];
+            var warningBanner = view.querySelector('#oidcConfigWarnings');
+            if (warningBanner) {
+                if (warnings.length > 0) {
+                    warningBanner.innerHTML = '<strong>Configuration Warnings:</strong><ul>' +
+                        warnings.map(function (w) { return '<li>' + esc(w) + '</li>'; }).join('') +
+                        '</ul>';
+                    warningBanner.style.display = 'block';
+                } else {
+                    warningBanner.style.display = 'none';
+                    warningBanner.innerHTML = '';
+                }
+            }
+            return ApiClient.updatePluginConfiguration(pluginId, cfg);
+        }).then(function (result) {
             Dashboard.processPluginConfigurationUpdateResult(result);
             Dashboard.hideLoadingMsg();
         }).catch(function (err) {

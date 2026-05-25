@@ -4,6 +4,7 @@ using System.IdentityModel.Tokens.Jwt;
 using System.Linq;
 using System.Text.Json;
 using Jellyfin.Plugin.OIDC.Configuration;
+using Microsoft.Extensions.Logging;
 
 namespace Jellyfin.Plugin.OIDC.Services;
 
@@ -143,7 +144,17 @@ public static class ClaimParser
     /// Rules are applied in order; first match wins. Empty ToValue drops the value.
     /// Values with no matching rule pass through unchanged.
     /// </summary>
-    public static string[] ApplyTransforms(string[] values, IReadOnlyList<ClaimTransform>? transforms)
+    /// <param name="values">The raw role values extracted from the token.</param>
+    /// <param name="transforms">The transform rules from provider config.</param>
+    /// <param name="providerId">Provider identifier used in log messages (not a claim value).</param>
+    /// <param name="logger">Optional logger. When supplied, logs each transform application at Info
+    /// and each role drop at Warning. Claim values from the token are NOT logged here (TASK-18);
+    /// only transform rule properties (FromValue, ToValue) are emitted.</param>
+    public static string[] ApplyTransforms(
+        string[] values,
+        IReadOnlyList<ClaimTransform>? transforms,
+        string? providerId = null,
+        ILogger? logger = null)
     {
         if (transforms == null || transforms.Count == 0)
         {
@@ -159,9 +170,19 @@ public static class ClaimParser
                 if (string.Equals(value, transform.FromValue, StringComparison.OrdinalIgnoreCase))
                 {
                     matched = true;
-                    if (!string.IsNullOrEmpty(transform.ToValue))
+                    if (!string.IsNullOrWhiteSpace(transform.ToValue))
                     {
                         result.Add(transform.ToValue);
+                        logger?.LogInformation(
+                            "Transform applied: provider={Provider} from={From} to={To} (role={Role})",
+                            providerId ?? "(unknown)", transform.FromValue, transform.ToValue, value);
+                    }
+                    else
+                    {
+                        // Empty/whitespace ToValue is an intentional role-drop (deny-list).
+                        logger?.LogWarning(
+                            "Transform dropped role={Role} via empty To (provider={Provider} from={From})",
+                            value, providerId ?? "(unknown)", transform.FromValue);
                     }
 
                     break;

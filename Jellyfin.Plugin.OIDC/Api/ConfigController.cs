@@ -3,10 +3,12 @@ using System.Linq;
 using System.Net.Http;
 using System.Threading.Tasks;
 using IdentityModel.Client;
+using Jellyfin.Plugin.OIDC.Configuration;
 using Jellyfin.Plugin.OIDC.Services;
 using MediaBrowser.Common.Api;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
+using Microsoft.Extensions.Logging;
 
 namespace Jellyfin.Plugin.OIDC.Api;
 
@@ -18,15 +20,18 @@ public class ConfigController : ControllerBase
     private readonly RbacService _rbacService;
     private readonly IHttpClientFactory _httpClientFactory;
     private readonly IPluginConfigProvider _configProvider;
+    private readonly ILogger<ConfigController> _logger;
 
     public ConfigController(
         RbacService rbacService,
         IHttpClientFactory httpClientFactory,
-        IPluginConfigProvider configProvider)
+        IPluginConfigProvider configProvider,
+        ILogger<ConfigController> logger)
     {
         _rbacService = rbacService;
         _httpClientFactory = httpClientFactory;
         _configProvider = configProvider;
+        _logger = logger;
     }
 
     [HttpGet("Libraries")]
@@ -61,6 +66,45 @@ public class ConfigController : ControllerBase
             RoleMappingCount = config.RoleMappings.Count,
             EnabledProviders = config.Providers.Where(p => p.Enabled).Select(p => p.DisplayName).ToList()
         });
+    }
+
+    /// <summary>
+    /// Validates a proposed configuration and returns any warnings. Does not save.
+    /// Called automatically by the UI on every save to surface issues without blocking.
+    /// </summary>
+    [HttpPost("ValidateConfig")]
+    public ActionResult ValidateConfig([FromBody] PluginConfiguration proposedConfig)
+    {
+        var warnings = new List<string>();
+
+        if (proposedConfig?.Providers != null && proposedConfig.RoleMappings != null)
+        {
+            // Collect role names of all grant mappings that confer admin.
+            var adminRoleNames = proposedConfig.RoleMappings
+                .Where(m => !m.IsExplicitDeny && m.IsAdmin)
+                .Select(m => m.RoleName)
+                .ToHashSet(StringComparer.OrdinalIgnoreCase);
+
+            foreach (var provider in proposedConfig.Providers)
+            {
+                foreach (var transform in provider.RoleTransforms ?? new List<ClaimTransform>())
+                {
+                    if (!string.IsNullOrWhiteSpace(transform.ToValue) &&
+                        adminRoleNames.Contains(transform.ToValue))
+                    {
+                        var msg = $"Provider '{provider.ProviderId}': transform from='{transform.FromValue}' " +
+                                  $"to='{transform.ToValue}' maps into an admin role mapping. " +
+                                  "Any IdP user with the '{transform.FromValue}' role will become a Jellyfin administrator.";
+                        warnings.Add(msg);
+                        _logger.LogWarning(
+                            "Config warning: provider={Provider} transform from={From} to={To} targets admin role",
+                            provider.ProviderId, transform.FromValue, transform.ToValue);
+                    }
+                }
+            }
+        }
+
+        return Ok(new { Warnings = warnings });
     }
 
     [HttpPost("TestProvider")]

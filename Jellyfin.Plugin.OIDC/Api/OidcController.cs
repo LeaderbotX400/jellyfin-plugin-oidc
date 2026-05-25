@@ -264,7 +264,7 @@ public class OidcController : ControllerBase
 
         // A.3 — apply claim transforms before role matching
         var rawRoles = roles;
-        roles = ClaimParser.ApplyTransforms(roles, provider.RoleTransforms);
+        roles = ClaimParser.ApplyTransforms(roles, provider.RoleTransforms, providerId, _logger);
 
         var entitlements = provider.EnableEntitlements
             ? ClaimParser.ExtractRoles(idToken, provider.EntitlementClaim)
