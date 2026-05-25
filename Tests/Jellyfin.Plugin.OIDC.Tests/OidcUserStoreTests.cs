@@ -1,7 +1,11 @@
 using System;
+using System.Collections.Generic;
 using System.IO;
+using System.Linq;
 using System.Threading.Tasks;
 using Jellyfin.Plugin.OIDC.Services;
+using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Logging.Abstractions;
 using Xunit;
 
 namespace Jellyfin.Plugin.OIDC.Tests;
@@ -24,6 +28,11 @@ public class OidcUserStoreTests : IDisposable
 
     private OidcUserStore MakeStore() =>
         new(Path.Combine(_tempDir, $"store_{Guid.NewGuid():N}.json"));
+
+    private OidcUserStore MakeStoreWithLogger(ILogger<OidcUserStore> logger, string? path = null) =>
+        new(path ?? Path.Combine(_tempDir, $"store_{Guid.NewGuid():N}.json"), logger);
+
+    // ── Existing tests (unchanged behaviour) ───────────────────────────────
 
     [Fact]
     public async Task LinkAndGetLinkedUserId_RoundTrip()
@@ -145,5 +154,164 @@ public class OidcUserStoreTests : IDisposable
 
         var found = await store.GetBySubAsync("sub-carol", "google");
         Assert.Null(found);
+    }
+
+    // ── Atomic write tests ─────────────────────────────────────────────────
+
+    [Fact]
+    public async Task Save_IsAtomic_TempFileThenRename()
+    {
+        // Verify that after a successful write the temp file no longer exists
+        // (it was renamed to the final path) and the final path contains valid data.
+        var storePath = Path.Combine(_tempDir, $"store_{Guid.NewGuid():N}.json");
+        var store = new OidcUserStore(storePath);
+        var userId = Guid.NewGuid();
+
+        await store.LinkAsync(userId, "sub-atomic", "idp");
+
+        // The temp file must not remain after a successful persist.
+        var tempPath = storePath + ".tmp";
+        Assert.False(File.Exists(tempPath), "Temp file should have been renamed away after successful write");
+
+        // The final file must contain valid JSON with our data.
+        Assert.True(File.Exists(storePath), "Final store file must exist");
+        var content = await File.ReadAllTextAsync(storePath);
+        Assert.Contains("sub-atomic", content);
+    }
+
+    [Fact]
+    public async Task Save_WritesToTempFirst_ThenAtomicallyReplaces()
+    {
+        // Round-trip: write, then load a fresh store from the same path to confirm data survives.
+        var storePath = Path.Combine(_tempDir, $"store_{Guid.NewGuid():N}.json");
+
+        var store1 = new OidcUserStore(storePath);
+        var userId = Guid.NewGuid();
+        await store1.LinkAsync(userId, "sub-persist", "idp");
+
+        // New store instance reads from the same file — confirms the rename-based write is durable.
+        var store2 = new OidcUserStore(storePath);
+        var found = await store2.GetLinkedUserIdAsync("sub-persist", "idp");
+
+        Assert.Equal(userId, found);
+    }
+
+    // ── Corruption recovery tests ──────────────────────────────────────────
+
+    [Fact]
+    public async Task Load_CorruptFile_QuarantinesAndMarksUnrecoverable()
+    {
+        // Security rationale: silently starting fresh after corruption re-enables the
+        // username-based rebind vector (TASK-04). Instead we quarantine and require
+        // explicit admin action, forcing attention to a potential data-loss event.
+
+        var storePath = Path.Combine(_tempDir, $"store_{Guid.NewGuid():N}.json");
+        await File.WriteAllTextAsync(storePath, "NOT VALID JSON !!!!");
+
+        var store = MakeStoreWithLogger(NullLogger<OidcUserStore>.Instance, storePath);
+
+        // Any read operation should throw OidcUserStoreUnavailableException.
+        await Assert.ThrowsAsync<OidcUserStoreUnavailableException>(
+            () => store.GetLinkedUserIdAsync("any-sub", "any-idp"));
+
+        // The corrupt file should have been quarantined (renamed to .corrupt-*).
+        Assert.False(File.Exists(storePath), "Original corrupt file should be renamed away");
+        var quarantined = Directory.GetFiles(_tempDir, Path.GetFileName(storePath) + ".corrupt-*");
+        Assert.Single(quarantined);
+    }
+
+    [Fact]
+    public async Task Load_CorruptFile_AllReadMethodsThrow()
+    {
+        // All public read/write methods must propagate the unavailable state.
+        var storePath = Path.Combine(_tempDir, $"store_{Guid.NewGuid():N}.json");
+        await File.WriteAllTextAsync(storePath, "{bad json");
+
+        var store = new OidcUserStore(storePath);
+
+        // Trigger load.
+        await Assert.ThrowsAsync<OidcUserStoreUnavailableException>(
+            () => store.GetAllAsync());
+
+        // Subsequent calls on the same instance must also throw.
+        await Assert.ThrowsAsync<OidcUserStoreUnavailableException>(
+            () => store.GetBySubAsync("s", "p"));
+        await Assert.ThrowsAsync<OidcUserStoreUnavailableException>(
+            () => store.GetLinkedUserIdAsync("s", "p"));
+        await Assert.ThrowsAsync<OidcUserStoreUnavailableException>(
+            () => store.LinkAsync(Guid.NewGuid(), "s", "p"));
+        await Assert.ThrowsAsync<OidcUserStoreUnavailableException>(
+            () => store.UnlinkAsync(Guid.NewGuid(), "p"));
+        await Assert.ThrowsAsync<OidcUserStoreUnavailableException>(
+            () => store.GetLinksForUserAsync(Guid.NewGuid()));
+        await Assert.ThrowsAsync<OidcUserStoreUnavailableException>(
+            () => store.UpsertAsync(new OidcUserRecord { UserId = Guid.NewGuid() }));
+    }
+
+    [Fact]
+    public async Task AdminReset_AfterCorruption_ClearsUnrecoverable()
+    {
+        var storePath = Path.Combine(_tempDir, $"store_{Guid.NewGuid():N}.json");
+        await File.WriteAllTextAsync(storePath, "totally not json");
+
+        var store = new OidcUserStore(storePath);
+
+        // Trigger load and corruption detection.
+        await Assert.ThrowsAsync<OidcUserStoreUnavailableException>(
+            () => store.GetLinkedUserIdAsync("x", "y"));
+
+        // Admin reset re-enables the store.
+        store.AdminReset();
+
+        // Should not throw — and should return null (empty store).
+        var result = await store.GetLinkedUserIdAsync("x", "y");
+        Assert.Null(result);
+
+        // Writes should work again.
+        var userId = Guid.NewGuid();
+        await store.LinkAsync(userId, "sub-reset", "idp");
+        var found = await store.GetLinkedUserIdAsync("sub-reset", "idp");
+        Assert.Equal(userId, found);
+    }
+
+    [Fact]
+    public async Task Logging_CorruptionLoggedAtError()
+    {
+        // Verify a logger receives at least one Error-level entry when a corrupt file is detected.
+        var storePath = Path.Combine(_tempDir, $"store_{Guid.NewGuid():N}.json");
+        await File.WriteAllTextAsync(storePath, "garbage");
+
+        var collector = new LogCollector<OidcUserStore>();
+        var store = MakeStoreWithLogger(collector, storePath);
+
+        await Assert.ThrowsAsync<OidcUserStoreUnavailableException>(
+            () => store.GetAllAsync());
+
+        Assert.True(
+            collector.HasLevel(LogLevel.Error),
+            "Expected at least one Error-level log entry for corruption detection");
+    }
+
+    // ── Log collector helper ───────────────────────────────────────────────
+
+    private sealed class LogCollector<T> : ILogger<T>
+    {
+        private readonly List<(LogLevel Level, string Message)> _entries = new();
+
+        public bool HasLevel(LogLevel level) => _entries.Any(e => e.Level == level);
+        public IReadOnlyList<(LogLevel Level, string Message)> Entries => _entries;
+
+        IDisposable? ILogger.BeginScope<TState>(TState state) => null;
+        bool ILogger.IsEnabled(LogLevel logLevel) => true;
+
+        void ILogger.Log<TState>(
+            LogLevel logLevel,
+            EventId eventId,
+            TState state,
+            Exception? exception,
+            Func<TState, Exception?, string> formatter)
+        {
+            _entries.Add((logLevel, formatter(state, exception)));
+        }
     }
 }

@@ -355,6 +355,12 @@ public class OidcController : ControllerBase
 
             return Ok(authResult);
         }
+        catch (OidcUserStoreUnavailableException ex)
+        {
+            _logger.LogError(ex, "OIDC user store is unavailable — login rejected for {Username}", session.Username);
+            return StatusCode(503, "OIDC user store is unavailable due to file corruption. " +
+                                   "An administrator must reset it via POST /sso/OIDC/Admin/UserStore/Reset.");
+        }
         catch (InvalidOperationException ex)
         {
             _logger.LogWarning("User sync failed: {Message}", ex.Message);
@@ -448,7 +454,16 @@ public class OidcController : ControllerBase
             return Unauthorized();
         }
 
-        await _userStore.UnlinkAsync(jellyfinUserId.Value, providerId).ConfigureAwait(false);
+        try
+        {
+            await _userStore.UnlinkAsync(jellyfinUserId.Value, providerId).ConfigureAwait(false);
+        }
+        catch (OidcUserStoreUnavailableException ex)
+        {
+            _logger.LogError(ex, "OIDC user store unavailable during Unlink for user {UserId}", jellyfinUserId.Value);
+            return StatusCode(503, "OIDC user store is unavailable. Contact an administrator.");
+        }
+
         _logger.LogInformation("Unlinked user {UserId} from provider {Provider}", jellyfinUserId.Value, providerId);
         return Ok();
     }
@@ -463,7 +478,17 @@ public class OidcController : ControllerBase
             return Unauthorized();
         }
 
-        var links = await _userStore.GetLinksForUserAsync(jellyfinUserId.Value).ConfigureAwait(false);
+        IReadOnlyList<(string ProviderId, string Sub)> links;
+        try
+        {
+            links = await _userStore.GetLinksForUserAsync(jellyfinUserId.Value).ConfigureAwait(false);
+        }
+        catch (OidcUserStoreUnavailableException ex)
+        {
+            _logger.LogError(ex, "OIDC user store unavailable during GetLinks for user {UserId}", jellyfinUserId.Value);
+            return StatusCode(503, "OIDC user store is unavailable. Contact an administrator.");
+        }
+
         return Ok(links.Select(l => new { l.ProviderId, l.Sub }));
     }
 
