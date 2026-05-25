@@ -10,17 +10,35 @@ on:
     tags:
       - "v*"
 
+# Default to read-only. The push-manifest job below overrides with contents: write.
 permissions:
-  contents: write
+  contents: read
 
 jobs:
   release:
     runs-on: ubuntu-latest
+    permissions:
+      contents: write  # needed to create the GitHub Release and push manifest update
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5  # v4.3.1
+
+      - name: Validate release branch
+        # Only allow releases from the main branch or tag pushes.
+        # Fail fast rather than silently committing to the wrong branch.
+        run: |
+          if [ "$GITHUB_EVENT_NAME" = "push" ]; then
+            # Tag push: GITHUB_REF_NAME is the tag (e.g. v0.1.2), which is always valid.
+            echo "Tag push: ${GITHUB_REF_NAME} — OK"
+          elif [ "$GITHUB_EVENT_NAME" = "workflow_dispatch" ]; then
+            if [ "$GITHUB_REF_NAME" != "main" ]; then
+              echo "::error::workflow_dispatch releases must be triggered from main, got: ${GITHUB_REF_NAME}"
+              exit 1
+            fi
+            echo "workflow_dispatch from main — OK"
+          fi
 
       - name: Setup .NET
-        uses: actions/setup-dotnet@v4
+        uses: actions/setup-dotnet@67a3573c9a986a3f9c594539f4ab511d57bb3ce9  # v4.3.1
         with:
           dotnet-version: "10.0.x"
 
@@ -38,11 +56,29 @@ jobs:
             -p:FileVersion=$VERSION
 
       - name: Package
-        run: cd dist && zip ../oidc-rbac.zip *.dll meta.json
+        run: cd dist && zip ../oidc-rbac.zip -- *.dll meta.json
+
+      - name: Compute checksums
+        run: |
+          # NOTE: Jellyfin's InstallationManager (Emby.Server.Implementations/Updates/InstallationManager.cs)
+          # validates plugin packages using MD5 (MD5.HashDataAsync) and compares against the manifest
+          # "checksum" field. This is acknowledged as broken crypto in Jellyfin's own source with a
+          # #pragma disable CA5351 suppression. We cannot migrate to SHA-256 here without a matching
+          # server-side change in Jellyfin. The MD5 here is for plugin-loader integrity only, not
+          # used for security authentication.
+          #
+          # SHA-256 is recorded alongside for informational purposes and future use.
+          MD5_CHECKSUM=$(md5sum oidc-rbac.zip | cut -d' ' -f1)
+          SHA256_CHECKSUM=$(sha256sum oidc-rbac.zip | cut -d' ' -f1)
+          echo "md5_checksum=${MD5_CHECKSUM}" >> "$GITHUB_OUTPUT"
+          echo "sha256_checksum=${SHA256_CHECKSUM}" >> "$GITHUB_OUTPUT"
+          echo "MD5 (Jellyfin manifest): ${MD5_CHECKSUM}"
+          echo "SHA-256 (informational): ${SHA256_CHECKSUM}"
+        id: checksums
 
       - name: Update manifest.json
         run: |
-          CHECKSUM=$(md5sum oidc-rbac.zip | cut -d' ' -f1)
+          CHECKSUM="${{ steps.checksums.outputs.md5_checksum }}"
           TIMESTAMP=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
           VERSION="${{ steps.version.outputs.version }}.0"
           DOWNLOAD_URL="https://github.com/${{ github.repository }}/releases/download/${GITHUB_REF_NAME}/oidc-rbac.zip"
@@ -62,7 +98,7 @@ jobs:
           mv manifest.json.new manifest.json
 
       - name: Create release
-        uses: softprops/action-gh-release@v2
+        uses: softprops/action-gh-release@3bb12739c298aeb8a4eeaf626c5b8d85266b0e65  # v2.6.2
         with:
           files: oidc-rbac.zip
           generate_release_notes: true
@@ -93,6 +129,9 @@ jobs:
           exit $fail
 
       - name: Commit updated manifest
+        # This job is the sole writer of manifest.json to main. The release workflow
+        # is triggered by tag pushes only, and Jellyfin consumers fetch the manifest
+        # directly from the main branch. This commit is intentional and expected.
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
@@ -107,13 +146,16 @@ jobs:
             exit 0
           fi
           git commit -m "Update manifest.json for ${GITHUB_REF_NAME}"
-          # Retry to survive concurrent pushes to main during the build
+          # Retry to survive concurrent pushes to main during the build.
+          # No --force: this job is the only manifest writer. If a concurrent push
+          # exists, rebase + retry cleanly; do NOT swallow rebase failures.
           for i in 1 2 3; do
             if git push origin main; then
               exit 0
             fi
             echo "Push failed, rebasing and retrying ($i/3)..."
-            git pull --rebase origin main || true
+            # No '|| true': if rebase fails, we want the job to fail so a human investigates.
+            git pull --rebase origin main
             sleep $((i * 2))
           done
           echo "::error::Failed to push manifest update after 3 attempts"
