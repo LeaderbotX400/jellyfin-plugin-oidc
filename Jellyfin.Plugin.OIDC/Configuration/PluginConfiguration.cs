@@ -85,6 +85,25 @@ public class OidcProviderConfig
 
     /// <summary>Transforms applied to extracted roles before matching against RoleMappings.</summary>
     public List<ClaimTransform> RoleTransforms { get; set; } = new();
+
+    /// <summary>
+    /// Algorithms (JWS "alg" header values) accepted when validating ID tokens / logout tokens from this provider.
+    /// Defaults to asymmetric algorithms only. Including any HS* algorithm is DANGEROUS: it allows
+    /// any holder of the client_secret to mint forged tokens, even when the IdP normally signs with RSA/EC.
+    /// </summary>
+    public List<string> AllowedSigningAlgorithms { get; set; } = new()
+    {
+        "RS256", "RS384", "RS512",
+        "ES256", "ES384", "ES512",
+        "PS256", "PS384", "PS512"
+    };
+
+    /// <summary>
+    /// DANGER — dev/test only. When true, allows non-HTTPS Authority/JWKS/Token/Authorize endpoints,
+    /// but ONLY when the host is localhost / 127.0.0.1. Production deployments MUST leave this false:
+    /// MITM on plain HTTP can swap JWKS and forge arbitrary tokens.
+    /// </summary>
+    public bool AllowInsecureAuthority { get; set; }
 }
 
 /// <summary>Maps a raw claim value to a normalized value before role matching.</summary>

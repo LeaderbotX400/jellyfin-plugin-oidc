@@ -120,6 +120,15 @@ function renderProviders(view) {
                 chk('prov_entitlements_' + idx, 'Enable entitlements', p.EnableEntitlements !== false) +
                 chk('prov_emailverified_' + idx, 'Require email_verified claim', p.RequireEmailVerified) +
                 '</div>') +
+            section('Security', '<div class="oidc-grid">' +
+                fld('Allowed Signing Algorithms', 'text', 'prov_algs_' + idx,
+                    (p.AllowedSigningAlgorithms || ['RS256','RS384','RS512','ES256','ES384','ES512','PS256','PS384','PS512']).join(','),
+                    'Comma-separated. Adding HS256/HS384/HS512 is DANGEROUS (relies on client_secret strength).', true) +
+                '</div>' +
+                '<div class="oidc-checkbox-row">' +
+                chk('prov_allowinsecure_' + idx, 'Allow insecure authority (DANGER: dev/test only — localhost HTTP)', p.AllowInsecureAuthority) +
+                '</div>' +
+                '<p class="oidc-hint">HTTPS is required for Authority / JWKS / token endpoints. The "Allow insecure" toggle relaxes this for localhost only and must never be enabled in production.</p>') +
             '<details class="oidc-details"><summary>Role Transforms <span class="oidc-count">(' + (p.RoleTransforms || []).length + ')</span></summary>' +
                 '<div class="oidc-transform-list" id="prov_transforms_' + idx + '"></div>' +
                 '<button type="button" is="emby-button" class="oidc-btn-add" data-action="add-transform" data-idx="' + idx + '"><span>+ Add Transform</span></button>' +
@@ -298,6 +307,7 @@ function runPreview(view) {
 function testProvider(view, idx) {
     var authority = gval(view, 'prov_authority_' + idx);
     var scopes = gval(view, 'prov_scopes_' + idx);
+    var allowInsecure = gchk(view, 'prov_allowinsecure_' + idx);
     var resultEl = view.querySelector('.oidc-test-result[data-idx="' + idx + '"]');
     if (!authority) {
         if (resultEl) { resultEl.style.color = '#c62828'; resultEl.textContent = 'Authority URL is required'; }
@@ -308,7 +318,7 @@ function testProvider(view, idx) {
     ApiClient.ajax({
         type: 'POST',
         url: ApiClient.getUrl('sso/OIDC/Config/TestProvider'),
-        data: JSON.stringify({ Authority: authority, Scopes: scopes }),
+        data: JSON.stringify({ Authority: authority, Scopes: scopes, AllowInsecureAuthority: allowInsecure }),
         contentType: 'application/json',
         dataType: 'json'
     }).then(function (result) {
@@ -354,7 +364,10 @@ function collectProviders(view) {
             RequireEmailVerified: gchk(view, 'prov_emailverified_' + idx),
             Enabled: gchk(view, 'prov_enabled_' + idx),
             ButtonIcon: '',
-            RoleTransforms: collectTransforms(view.querySelector('#prov_transforms_' + idx))
+            RoleTransforms: collectTransforms(view.querySelector('#prov_transforms_' + idx)),
+            AllowInsecureAuthority: gchk(view, 'prov_allowinsecure_' + idx),
+            AllowedSigningAlgorithms: gval(view, 'prov_algs_' + idx)
+                .split(',').map(function (s) { return s.trim(); }).filter(function (s) { return s.length > 0; })
         });
     });
     return result;
@@ -468,7 +481,9 @@ export default function (view) {
             DisplayNameClaim: 'name', Enabled: true, ButtonColor: '#4285F4',
             ButtonIcon: '', AdditionalParameters: '',
             EntitlementClaim: 'entitlements', EntitlementPrefix: 'jellyfin:',
-            EnableEntitlements: true, RequireEmailVerified: false, RoleTransforms: []
+            EnableEntitlements: true, RequireEmailVerified: false, RoleTransforms: [],
+            AllowInsecureAuthority: false,
+            AllowedSigningAlgorithms: ['RS256','RS384','RS512','ES256','ES384','ES512','PS256','PS384','PS512']
         });
         renderProviders(view);
     });

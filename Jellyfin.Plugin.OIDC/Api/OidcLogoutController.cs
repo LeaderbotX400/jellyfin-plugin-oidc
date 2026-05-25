@@ -91,7 +91,7 @@ public class OidcLogoutController : ControllerBase
             return BadRequest("Unknown audience");
         }
 
-        var disco = await _discoveryCache.GetAsync(provider.Authority).ConfigureAwait(false);
+        var disco = await _discoveryCache.GetAsync(provider.Authority, provider.AllowInsecureAuthority).ConfigureAwait(false);
 
         if (disco.IsError)
         {
@@ -105,7 +105,8 @@ public class OidcLogoutController : ControllerBase
         try
         {
             signingKeys = await SigningKeyResolver.ResolveAsync(
-                logout_token, provider.ClientSecret, disco.JwksUri, _jwksCache).ConfigureAwait(false);
+                logout_token, provider.ClientSecret, disco.JwksUri, _jwksCache,
+                provider.AllowedSigningAlgorithms).ConfigureAwait(false);
         }
         catch (Exception ex)
         {
@@ -118,6 +119,7 @@ public class OidcLogoutController : ControllerBase
             ValidIssuer = disco.Issuer,
             ValidAudience = provider.ClientId,
             IssuerSigningKeys = signingKeys,
+            ValidAlgorithms = provider.AllowedSigningAlgorithms,
             ValidateIssuer = true,
             ValidateAudience = true,
             ValidateLifetime = true,
