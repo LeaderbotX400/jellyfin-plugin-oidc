@@ -33,7 +33,7 @@ cat > "$REPO_DIR/manifest.json" <<EOF
     "name": "OIDC RBAC",
     "description": "Advanced OIDC authentication with role-based library access control",
     "overview": "OpenID Connect SSO with role-to-library mapping, multi-provider support, and admin UI.",
-    "owner": "Ezeqielle",
+    "owner": "LeaderbotX400",
     "category": "Authentication",
     "versions": [
       {
