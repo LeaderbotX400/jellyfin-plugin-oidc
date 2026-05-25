@@ -1,3 +1,74 @@
+# Migration Notes
+
+## v0.1.3 — Deny-mapping default-permission fix
+
+### What changed
+
+`EnableMediaPlayback`, `EnableRemoteAccess`, and `EnableTranscoding` on `RoleMapping` are now
+`bool?` (nullable boolean) instead of `bool`.
+
+**Before (v0.1.2 and earlier):** These fields defaulted to `true` on every new `RoleMapping`,
+including deny mappings. An admin who created a deny mapping to strip, say, administrator
+privileges would also inadvertently strip playback, remote access, and transcoding from every
+matched user — because those fields were silently `true` on the deny mapping.
+
+**After (v0.1.3):** The semantics are:
+
+| Context | Field value | Meaning |
+|---------|-------------|---------|
+| Allow mapping | `null` | Default true — behaves as before (backward compatible) |
+| Allow mapping | `true` | Explicitly granted |
+| Allow mapping | `false` | Not granted by this mapping |
+| Deny mapping | `null` | **No-op — this deny rule does not touch this permission** |
+| Deny mapping | `true` | Explicitly stripped after grants are applied |
+| Deny mapping | `false` | No-op (same as null for deny path) |
+
+### Automatic migration on first load
+
+On first startup after upgrading to v0.1.3, the plugin inspects every deny mapping in the
+saved configuration. For each deny mapping that has `EnableMediaPlayback`, `EnableRemoteAccess`,
+or `EnableTranscoding` set to `true` **and** has not already been migrated (checked via the
+new `MigratedDenyDefaults` sentinel field), the plugin:
+
+1. Clears those three fields to `null`.
+2. Sets `MigratedDenyDefaults = true` on that mapping to prevent the migration from running
+   again on subsequent loads.
+3. Logs a **warning** identifying the affected deny mapping by role name.
+
+### Action required after upgrade
+
+After upgrading, check the Jellyfin server log for warnings like:
+
+```
+WARN  Jellyfin.Plugin.OIDC.OidcPlugin OIDC RBAC migration (v0.1.3): deny mapping 'my-deny-role'
+      had legacy default-true values for EnableMediaPlayback / EnableRemoteAccess / EnableTranscoding.
+      These have been cleared to null (no-op for deny). Please review your deny mappings in the
+      admin UI and explicitly enable the permissions you want this deny rule to strip.
+```
+
+If you see this warning, open the plugin admin UI → Role Mappings, find the affected deny
+mapping, and check the permissions you actually want that deny rule to strip. Save the
+configuration. After saving, the `MigratedDenyDefaults` sentinel ensures the migration will
+not clear your explicit choices again.
+
+### Admin UI changes
+
+- Deny mappings now show a hint explaining that only checked permissions are stripped.
+- The three formerly-default-true checkboxes (Playback, Remote Access, Transcoding) now render
+  as **unchecked** for deny mappings where they have not been explicitly set — matching the new
+  semantics.
+- Toggling "Explicit Deny" on an existing mapping still clears all permission checkboxes
+  (existing behaviour), preventing accidental strip-all on conversion.
+- New role mappings use `null` for the three fields, rendering correctly as checked for allow
+  mappings and unchecked for deny mappings.
+
+### No action needed for allow mappings
+
+Allow mappings are unaffected. `null` on an allow mapping is treated as `true` (default
+playback/remote/transcoding granted), preserving all existing allow behaviour.
+
+---
+
 # Migrating Existing Jellyfin Users to OIDC
 
 If you already have Jellyfin users with watch history, favorites, playlists, etc., you can move them onto OIDC SSO without losing data — as long as the OIDC username matches the existing Jellyfin username.

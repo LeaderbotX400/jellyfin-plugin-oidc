@@ -109,9 +109,21 @@ public static class PermissionResolver
         var remoteControl = Resolve(false, entSet.EnableRemoteControlOfOtherUsers, false);
         var publicSharing = Resolve(false, entSet.EnablePublicSharing, false);
 
-        var playback = Resolve(merged.EnableMediaPlayback, entSet.EnableMediaPlayback, deny?.EnableMediaPlayback);
-        var remote = Resolve(merged.EnableRemoteAccess, entSet.EnableRemoteAccess, deny?.EnableRemoteAccess);
-        var transcode = Resolve(merged.EnableTranscoding, entSet.EnableTranscoding, deny?.EnableTranscoding);
+        // TASK-08: Playback/Remote/Transcoding are bool? on RoleMapping — null = "no opinion, default true".
+        // Deny mappings with null on these fields are no-ops (only explicit true strips the permission).
+        bool? ResolveDefaultTrue(bool? grant, bool entitlement, bool? denyOpinion)
+        {
+            if (denyOpinion == true) return false;
+            if (entitlement) return true;
+            if (grant == true) return true;
+            if (grant == false) return respectExisting ? (bool?)null : false;
+            // grant is null: no opinion from mapping set — default true unless deny said otherwise
+            return true;
+        }
+
+        var playback = ResolveDefaultTrue(merged.EnableMediaPlayback, entSet.EnableMediaPlayback, deny?.EnableMediaPlayback);
+        var remote = ResolveDefaultTrue(merged.EnableRemoteAccess, entSet.EnableRemoteAccess, deny?.EnableRemoteAccess);
+        var transcode = ResolveDefaultTrue(merged.EnableTranscoding, entSet.EnableTranscoding, deny?.EnableTranscoding);
         var liveTv = Resolve(merged.EnableLiveTv, entSet.EnableLiveTv, deny?.EnableLiveTv);
         var liveTvMgmt = Resolve(merged.EnableLiveTvManagement, entSet.EnableLiveTvManagement, deny?.EnableLiveTvManagement);
         var delete = Resolve(merged.EnableContentDeletion, entSet.EnableContentDeletion, deny?.EnableContentDeletion);
@@ -215,15 +227,24 @@ public static class PermissionResolver
         EnableTranscoding = false,
     };
 
+    // TASK-08: for nullable bool? grant fields, null = "no opinion".
+    // OR semantics: any explicit true → true; all explicit false → false; all null → null.
+    private static bool? MergeNullableBool(List<RoleMapping> mappings, Func<RoleMapping, bool?> selector)
+    {
+        var values = mappings.Select(selector).Where(v => v.HasValue).Select(v => v!.Value).ToList();
+        if (values.Count == 0) return null;
+        return values.Any(v => v);
+    }
+
     internal static RoleMapping MergeMappings(List<RoleMapping> mappings) => new()
     {
         IsAdmin = mappings.Any(m => m.IsAdmin),
         EnableAllLibraries = mappings.Any(m => m.EnableAllLibraries),
         EnableLiveTv = mappings.Any(m => m.EnableLiveTv),
         EnableLiveTvManagement = mappings.Any(m => m.EnableLiveTvManagement),
-        EnableMediaPlayback = mappings.Any(m => m.EnableMediaPlayback),
-        EnableRemoteAccess = mappings.Any(m => m.EnableRemoteAccess),
-        EnableTranscoding = mappings.Any(m => m.EnableTranscoding),
+        EnableMediaPlayback = MergeNullableBool(mappings, m => m.EnableMediaPlayback),
+        EnableRemoteAccess = MergeNullableBool(mappings, m => m.EnableRemoteAccess),
+        EnableTranscoding = MergeNullableBool(mappings, m => m.EnableTranscoding),
         EnableContentDeletion = mappings.Any(m => m.EnableContentDeletion),
         EnableCollectionManagement = mappings.Any(m => m.EnableCollectionManagement),
         EnableSubtitleManagement = mappings.Any(m => m.EnableSubtitleManagement),

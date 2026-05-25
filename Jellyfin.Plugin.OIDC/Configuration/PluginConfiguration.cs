@@ -278,11 +278,18 @@ public class RoleMapping
 
     public bool EnableLiveTvManagement { get; set; }
 
-    public bool EnableMediaPlayback { get; set; } = true;
+    /// <summary>
+    /// Nullable so deny mappings can express "don't touch this permission" via null.
+    /// For allow mappings: null is treated as true (preserve prior default).
+    /// For deny mappings: only explicit true strips the permission; null is a no-op.
+    /// </summary>
+    public bool? EnableMediaPlayback { get; set; }
 
-    public bool EnableRemoteAccess { get; set; } = true;
+    /// <inheritdoc cref="EnableMediaPlayback"/>
+    public bool? EnableRemoteAccess { get; set; }
 
-    public bool EnableTranscoding { get; set; } = true;
+    /// <inheritdoc cref="EnableMediaPlayback"/>
+    public bool? EnableTranscoding { get; set; }
 
     public bool EnableContentDeletion { get; set; }
 
@@ -301,6 +308,13 @@ public class RoleMapping
     public int? MaxParentalRating { get; set; }
 
     public int Priority { get; set; }
+
+    /// <summary>
+    /// Set to true by the v0.1.3 migration once legacy default-true deny flags have been
+    /// cleared. Prevents the migration guard from repeatedly clearing values that the
+    /// admin has deliberately set to true in the new UI.
+    /// </summary>
+    public bool MigratedDenyDefaults { get; set; }
 }
 
 /// <summary>Configuration for a SAML 2.0 identity provider.</summary>

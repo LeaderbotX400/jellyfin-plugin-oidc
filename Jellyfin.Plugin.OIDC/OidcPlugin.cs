@@ -5,15 +5,25 @@ using MediaBrowser.Common.Configuration;
 using MediaBrowser.Common.Plugins;
 using MediaBrowser.Model.Plugins;
 using MediaBrowser.Model.Serialization;
+using Microsoft.Extensions.Logging;
 
 namespace Jellyfin.Plugin.OIDC;
 
 public class OidcPlugin : BasePlugin<PluginConfiguration>, IHasWebPages
 {
+    private readonly ILogger<OidcPlugin> _log;
+
     public OidcPlugin(IApplicationPaths applicationPaths, IXmlSerializer xmlSerializer)
         : base(applicationPaths, xmlSerializer)
     {
         Instance = this;
+        _log = LoggerFactory.Create(b => b.AddConsole()).CreateLogger<OidcPlugin>();
+
+        // Run migration on initial load.
+        RunMigration(Configuration);
+
+        // Re-run after every config save (e.g. from the admin UI).
+        ConfigurationChanged += (_, cfg) => RunMigration((PluginConfiguration)cfg);
     }
 
     public static OidcPlugin? Instance { get; private set; }
@@ -40,5 +50,20 @@ public class OidcPlugin : BasePlugin<PluginConfiguration>, IHasWebPages
                 EmbeddedResourcePath = $"{ns}.Configuration.oidcrbac.js"
             }
         };
+    }
+
+    private void RunMigration(PluginConfiguration cfg)
+    {
+        var migrated = ConfigMigration.MigrateDenyMappings(cfg.RoleMappings);
+        foreach (var role in migrated)
+        {
+            _log.LogWarning(
+                "OIDC RBAC migration (v0.1.3): deny mapping '{Role}' had legacy default-true values for " +
+                "EnableMediaPlayback / EnableRemoteAccess / EnableTranscoding. " +
+                "These have been cleared to null (no-op for deny). " +
+                "Please review your deny mappings in the admin UI and explicitly enable the " +
+                "permissions you want this deny rule to strip.",
+                role);
+        }
     }
 }

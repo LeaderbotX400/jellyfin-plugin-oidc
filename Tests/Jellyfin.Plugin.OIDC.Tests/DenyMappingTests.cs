@@ -5,6 +5,7 @@ using Jellyfin.Plugin.OIDC.Configuration;
 using Jellyfin.Plugin.OIDC.Services;
 using Xunit;
 
+
 namespace Jellyfin.Plugin.OIDC.Tests;
 
 /// <summary>
@@ -22,6 +23,8 @@ public class DenyMappingTests
         var rbac = new TestableRbacService();
         return rbac.ComputePreview(roles, Array.Empty<string>(), providerId, mappings);
     }
+
+    // ── Existing tests (preserved with updated semantics) ─────────────────────
 
     [Fact]
     public void DenyMapping_StripsAdminGrantedByOtherMapping()
@@ -54,14 +57,21 @@ public class DenyMappingTests
     [Fact]
     public void DenyMapping_OnlyDenyRole_NoPermissionsGranted()
     {
+        // A deny mapping with only IsAdmin=true (non-nullable field).
+        // The three nullable fields are null — they should be no-ops.
         var mappings = new List<RoleMapping>
         {
-            new() { RoleName = "blocked", IsAdmin = true, EnableMediaPlayback = true, IsExplicitDeny = true }
+            new() { RoleName = "blocked", IsAdmin = true, IsExplicitDeny = true }
         };
 
         var preview = Preview(new[] { "blocked" }, mappings);
 
+        // No grant mapping matched, so nothing was granted in the first place.
         Assert.False(preview.IsAdmin);
+        // Deny mapping with null Playback/Remote/Transcode must NOT strip these.
+        // (Nothing to strip since there's no grant, but the playback flag from the
+        // grant side defaults to true when no grant matches — so we verify it's true.)
+        Assert.True(preview.EnableMediaPlayback, "No explicit deny of playback — should default true from grant path");
     }
 
     [Fact]
@@ -77,6 +87,153 @@ public class DenyMappingTests
 
         Assert.True(preview.EnableDownload, "Non-denied permissions should still be granted");
         Assert.False(preview.EnableLiveTv, "Denied permission should be removed");
+    }
+
+    // ── New tests for nullable-bool deny semantics ────────────────────────────
+
+    /// <summary>
+    /// Headline regression: deny mapping for "admin" should only strip admin,
+    /// not silently strip playback/remote/transcoding which were default-true on <see cref="RoleMapping"/>.
+    /// </summary>
+    [Fact]
+    public void DenyMapping_OnlyIsAdmin_DoesNotStripPlayback()
+    {
+        var mappings = new List<RoleMapping>
+        {
+            // Grant: regular user with playback
+            new() { RoleName = "user", EnableMediaPlayback = true, EnableRemoteAccess = true, EnableTranscoding = true },
+            // Deny: only strips admin — EnableMediaPlayback/Remote/Transcoding are null (not set)
+            new() { RoleName = "noadmin", IsAdmin = true, IsExplicitDeny = true }
+        };
+
+        var preview = Preview(new[] { "user", "noadmin" }, mappings);
+
+        Assert.False(preview.IsAdmin, "Admin should be denied");
+        Assert.True(preview.EnableMediaPlayback, "Playback was not in the deny mapping — must not be stripped");
+        Assert.True(preview.EnableRemoteAccess, "Remote access was not in the deny mapping — must not be stripped");
+        Assert.True(preview.EnableTranscoding, "Transcoding was not in the deny mapping — must not be stripped");
+    }
+
+    /// <summary>
+    /// Deny mapping with only EnableMediaPlayback=true should strip only playback,
+    /// leaving remote access and transcoding intact.
+    /// </summary>
+    [Fact]
+    public void DenyMapping_OnlyPlayback_StripsOnlyPlayback()
+    {
+        var mappings = new List<RoleMapping>
+        {
+            new() { RoleName = "user", EnableMediaPlayback = true, EnableRemoteAccess = true, EnableTranscoding = true },
+            new() { RoleName = "noplay", EnableMediaPlayback = true, IsExplicitDeny = true }
+            // EnableRemoteAccess and EnableTranscoding are null on the deny mapping
+        };
+
+        var preview = Preview(new[] { "user", "noplay" }, mappings);
+
+        Assert.False(preview.EnableMediaPlayback, "Explicitly denied — must be stripped");
+        Assert.True(preview.EnableRemoteAccess, "Not in deny mapping — must remain granted");
+        Assert.True(preview.EnableTranscoding, "Not in deny mapping — must remain granted");
+    }
+
+    /// <summary>
+    /// A deny mapping where all nullable permission fields are null is a no-op —
+    /// it strips nothing.
+    /// </summary>
+    [Fact]
+    public void DenyMapping_AllFlagsNull_NoOp()
+    {
+        var mappings = new List<RoleMapping>
+        {
+            new()
+            {
+                RoleName = "user",
+                EnableMediaPlayback = true,
+                EnableRemoteAccess = true,
+                EnableTranscoding = true,
+                EnableDownload = true
+            },
+            // Deny mapping with everything null / false — no explicit denial of anything
+            new()
+            {
+                RoleName = "emptydeny",
+                IsExplicitDeny = true
+                // EnableMediaPlayback = null (default)
+                // EnableRemoteAccess  = null (default)
+                // EnableTranscoding   = null (default)
+                // IsAdmin             = false (default)
+                // EnableDownload      = false (default)
+            }
+        };
+
+        var preview = Preview(new[] { "user", "emptydeny" }, mappings);
+
+        Assert.True(preview.EnableMediaPlayback, "Null deny = no-op");
+        Assert.True(preview.EnableRemoteAccess, "Null deny = no-op");
+        Assert.True(preview.EnableTranscoding, "Null deny = no-op");
+        Assert.True(preview.EnableDownload, "false deny = no-op (false means not set, not 'deny')");
+    }
+
+    /// <summary>
+    /// Existing allow-mapping behaviour must not regress after the nullable-bool change.
+    /// Allow mappings with null for the three fields must behave as if they were true
+    /// (the prior default).
+    /// </summary>
+    [Fact]
+    public void AllowMapping_BackwardCompat_UnchangedBehavior()
+    {
+        // Simulate an allow mapping saved by the OLD serialiser (no XML element for the
+        // three fields → deserialized as null).  The effective value must still be true.
+        var mappings = new List<RoleMapping>
+        {
+            new()
+            {
+                RoleName = "user",
+                // EnableMediaPlayback = null  ← old serialised form, missing element
+                // EnableRemoteAccess  = null
+                // EnableTranscoding   = null
+            }
+        };
+
+        var preview = Preview(new[] { "user" }, mappings);
+
+        Assert.True(preview.EnableMediaPlayback, "null on allow mapping = default true (backward compat)");
+        Assert.True(preview.EnableRemoteAccess, "null on allow mapping = default true (backward compat)");
+        Assert.True(preview.EnableTranscoding, "null on allow mapping = default true (backward compat)");
+    }
+
+    /// <summary>
+    /// Migration: a legacy deny mapping that arrives with the old default-true values
+    /// for Playback/Remote/Transcode should have those cleared by <see cref="OidcPlugin.MigrateDenyMappings"/>.
+    /// We simulate this by constructing the pre-migration state and verifying the outcome.
+    /// </summary>
+    [Fact]
+    public void Migration_LegacyDenyMapping_AllFlagsClearedToNull()
+    {
+        // Pre-migration state: deny mapping has explicit true on the three nullable fields
+        // (as a pre-v0.1.3 serialiser would have written from the old bool default = true).
+        var roleMappings = new List<RoleMapping>
+        {
+            new()
+            {
+                RoleName = "olddenyrole",
+                IsExplicitDeny = true,
+                EnableMediaPlayback = true,  // legacy default-true
+                EnableRemoteAccess = true,   // legacy default-true
+                EnableTranscoding = true,    // legacy default-true
+                IsAdmin = true               // non-nullable explicitly set — must be preserved
+            }
+        };
+
+        // Run the shared migration — same code path the plugin calls on startup.
+        // ConfigMigration takes IList<RoleMapping> to avoid pulling MediaBrowser.Model into tests.
+        ConfigMigration.MigrateDenyMappings(roleMappings);
+
+        var m = roleMappings[0];
+        Assert.Null(m.EnableMediaPlayback); // Legacy default-true should be cleared to null
+        Assert.Null(m.EnableRemoteAccess);  // Legacy default-true should be cleared to null
+        Assert.Null(m.EnableTranscoding);   // Legacy default-true should be cleared to null
+        Assert.True(m.IsAdmin, "Explicitly-set non-nullable field must not be touched");
+        Assert.True(m.MigratedDenyDefaults, "Migration sentinel must be set to prevent double-migration");
     }
 
     // ── Test helper that exposes the two-pass grant/deny logic without Jellyfin DI ──
@@ -103,13 +260,16 @@ public class DenyMappingTests
             var merged = grantMappings.Count > 0 ? Merge(grantMappings) : new RoleMapping();
             var deny = denyMappings.Count > 0 ? Merge(denyMappings) : null;
 
+            // Mirror the semantics in RbacService.ComputePermissions:
+            // - Allow path: null = default true (backward compat).
+            // - Deny path: only explicit true (== true) strips the permission.
             return new PermissionPreview(
                 IsAdmin: merged.IsAdmin && !(deny?.IsAdmin ?? false),
                 IsDisabled: false,
                 IsHidden: false,
-                EnableMediaPlayback: merged.EnableMediaPlayback && !(deny?.EnableMediaPlayback ?? false),
-                EnableRemoteAccess: merged.EnableRemoteAccess && !(deny?.EnableRemoteAccess ?? false),
-                EnableTranscoding: merged.EnableTranscoding && !(deny?.EnableTranscoding ?? false),
+                EnableMediaPlayback: (merged.EnableMediaPlayback ?? true) && !(deny?.EnableMediaPlayback == true),
+                EnableRemoteAccess: (merged.EnableRemoteAccess ?? true) && !(deny?.EnableRemoteAccess == true),
+                EnableTranscoding: (merged.EnableTranscoding ?? true) && !(deny?.EnableTranscoding == true),
                 EnableSyncTranscoding: false,
                 ForceRemoteSourceTranscoding: false,
                 EnablePlaybackRemuxing: false,
@@ -144,21 +304,35 @@ public class DenyMappingTests
                 ParsedEntitlements: entitlements);
         }
 
-        private static RoleMapping Merge(List<RoleMapping> mappings) => new()
+        private static RoleMapping Merge(List<RoleMapping> mappings)
         {
-            IsAdmin = mappings.Any(m => m.IsAdmin),
-            EnableAllLibraries = mappings.Any(m => m.EnableAllLibraries),
-            EnableLiveTv = mappings.Any(m => m.EnableLiveTv),
-            EnableLiveTvManagement = mappings.Any(m => m.EnableLiveTvManagement),
-            EnableMediaPlayback = mappings.Any(m => m.EnableMediaPlayback),
-            EnableRemoteAccess = mappings.Any(m => m.EnableRemoteAccess),
-            EnableTranscoding = mappings.Any(m => m.EnableTranscoding),
-            EnableContentDeletion = mappings.Any(m => m.EnableContentDeletion),
-            EnableCollectionManagement = mappings.Any(m => m.EnableCollectionManagement),
-            EnableSubtitleManagement = mappings.Any(m => m.EnableSubtitleManagement),
-            EnableDownload = mappings.Any(m => m.EnableDownload),
-            EnableSyncplay = mappings.Any(m => m.EnableSyncplay || m.EnableSyncplayGroupCreation),
-            EnableSyncplayGroupCreation = mappings.Any(m => m.EnableSyncplayGroupCreation)
-        };
+            // For nullable bool? fields: OR semantics across mappings.
+            // If any mapping explicitly sets true, result is true.
+            // If all are null (not specified), result stays null.
+            static bool? MergeNullable(List<RoleMapping> ms, Func<RoleMapping, bool?> selector)
+            {
+                var values = ms.Select(selector).Where(v => v.HasValue).Select(v => v!.Value).ToList();
+                if (values.Count == 0) return null;
+                return values.Any(v => v);
+            }
+
+            return new RoleMapping
+            {
+                IsAdmin = mappings.Any(m => m.IsAdmin),
+                EnableAllLibraries = mappings.Any(m => m.EnableAllLibraries),
+                EnableLiveTv = mappings.Any(m => m.EnableLiveTv),
+                EnableLiveTvManagement = mappings.Any(m => m.EnableLiveTvManagement),
+                EnableMediaPlayback = MergeNullable(mappings, m => m.EnableMediaPlayback),
+                EnableRemoteAccess = MergeNullable(mappings, m => m.EnableRemoteAccess),
+                EnableTranscoding = MergeNullable(mappings, m => m.EnableTranscoding),
+                EnableContentDeletion = mappings.Any(m => m.EnableContentDeletion),
+                EnableCollectionManagement = mappings.Any(m => m.EnableCollectionManagement),
+                EnableSubtitleManagement = mappings.Any(m => m.EnableSubtitleManagement),
+                EnableDownload = mappings.Any(m => m.EnableDownload),
+                EnableSyncplay = mappings.Any(m => m.EnableSyncplay || m.EnableSyncplayGroupCreation),
+                EnableSyncplayGroupCreation = mappings.Any(m => m.EnableSyncplayGroupCreation)
+            };
+        }
     }
 }
+
