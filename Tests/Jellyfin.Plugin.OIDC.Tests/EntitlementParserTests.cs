@@ -140,6 +140,57 @@ public class EntitlementParserTests
     }
 
     [Fact]
+    public void Parse_BitrateNumeric_HighestWins()
+    {
+        var set = EntitlementParser.Parse(["jellyfin:bitrate:5000", "jellyfin:bitrate:10000"], "jellyfin:");
+        Assert.Equal(10000, set.RemoteClientBitrateLimit);
+        Assert.False(set.ClearRemoteClientBitrateLimit);
+    }
+
+    [Fact]
+    public void Parse_BitrateUnlimited_SetsClearFlag()
+    {
+        var set = EntitlementParser.Parse(["jellyfin:bitrate:unlimited"], "jellyfin:");
+        Assert.True(set.ClearRemoteClientBitrateLimit);
+    }
+
+    [Fact]
+    public void Parse_SessionsUnlimited_MapsToZero()
+    {
+        // Jellyfin convention: MaxActiveSessions=0 means unlimited.
+        var set = EntitlementParser.Parse(["jellyfin:sessions:unlimited"], "jellyfin:");
+        Assert.Equal(0, set.MaxActiveSessions);
+    }
+
+    [Fact]
+    public void Parse_SessionsNumeric_HighestWinsUnlessUnlimited()
+    {
+        var set = EntitlementParser.Parse(
+            ["jellyfin:sessions:3", "jellyfin:sessions:5", "jellyfin:sessions:unlimited"],
+            "jellyfin:");
+        Assert.Equal(0, set.MaxActiveSessions);  // unlimited trumps numeric
+    }
+
+    [Fact]
+    public void Parse_LoginAttempts_NumericAndUnlimited()
+    {
+        var set = EntitlementParser.Parse(["jellyfin:login-attempts:10"], "jellyfin:");
+        Assert.Equal(10, set.LoginAttemptsBeforeLockout);
+        Assert.False(set.ClearLoginAttemptsBeforeLockout);
+
+        var set2 = EntitlementParser.Parse(["jellyfin:login-attempts:unlimited"], "jellyfin:");
+        Assert.True(set2.ClearLoginAttemptsBeforeLockout);
+    }
+
+    [Fact]
+    public void Parse_RatingSub_IndependentFromRating()
+    {
+        var set = EntitlementParser.Parse(["jellyfin:rating:13", "jellyfin:rating:sub:7"], "jellyfin:");
+        Assert.Equal(13, set.MaxParentalRating);
+        Assert.Equal(7, set.MaxParentalRatingSub);
+    }
+
+    [Fact]
     public void Parse_ExpandedVocabulary_AreParsed()
     {
         var entitlements = new[]

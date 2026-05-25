@@ -196,6 +196,13 @@ public static class PermissionResolver
             Libraries: libraries,
             MaxParentalRating: maxRating,
             ClearMaxParentalRating: clearRating,
+            MaxParentalRatingSub: entSet.MaxParentalRatingSub,
+            ClearMaxParentalRatingSub: entSet.ClearMaxParentalRatingSub,
+            RemoteClientBitrateLimit: entSet.RemoteClientBitrateLimit,
+            ClearRemoteClientBitrateLimit: entSet.ClearRemoteClientBitrateLimit,
+            MaxActiveSessions: entSet.MaxActiveSessions,
+            LoginAttemptsBeforeLockout: entSet.LoginAttemptsBeforeLockout,
+            ClearLoginAttemptsBeforeLockout: entSet.ClearLoginAttemptsBeforeLockout,
             MatchedGrantMappings: grantMappings.Select(m => m.RoleName).ToArray(),
             MatchedDenyMappings: denyMappings.Select(m => m.RoleName).ToArray(),
             ParsedEntitlements: entitlements);

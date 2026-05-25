@@ -40,6 +40,13 @@ public sealed record PermissionPreview(
     List<string>? Libraries,
     int? MaxParentalRating,
     bool ClearMaxParentalRating,
+    int? MaxParentalRatingSub,
+    bool ClearMaxParentalRatingSub,
+    int? RemoteClientBitrateLimit,
+    bool ClearRemoteClientBitrateLimit,
+    int? MaxActiveSessions,
+    int? LoginAttemptsBeforeLockout,
+    bool ClearLoginAttemptsBeforeLockout,
     string[] MatchedGrantMappings,
     string[] MatchedDenyMappings,
     string[] ParsedEntitlements);

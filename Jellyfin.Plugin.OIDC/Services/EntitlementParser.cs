@@ -44,6 +44,20 @@ public class EntitlementSet
     /// </summary>
     public bool ClearMaxParentalRating { get; set; }
 
+    public int? MaxParentalRatingSub { get; set; }
+    public bool ClearMaxParentalRatingSub { get; set; }
+
+    /// <summary>Remote client bitrate limit in kbps. Highest claim wins.</summary>
+    public int? RemoteClientBitrateLimit { get; set; }
+    public bool ClearRemoteClientBitrateLimit { get; set; }
+
+    /// <summary>Max active sessions. 0 means unlimited in Jellyfin.</summary>
+    public int? MaxActiveSessions { get; set; }
+
+    /// <summary>Login attempts before lockout. Null means unlimited.</summary>
+    public int? LoginAttemptsBeforeLockout { get; set; }
+    public bool ClearLoginAttemptsBeforeLockout { get; set; }
+
     public bool HasAny { get; private set; }
 
     internal void MarkHasAny() => HasAny = true;
@@ -162,6 +176,21 @@ public static class EntitlementParser
                             set.LibraryNames.Add(libraryName);
                         }
                     }
+                    else if (token.StartsWith("rating:sub:", StringComparison.OrdinalIgnoreCase))
+                    {
+                        var val = token["rating:sub:".Length..];
+                        if (val is "unlimited" or "none" or "max")
+                        {
+                            set.ClearMaxParentalRatingSub = true;
+                        }
+                        else if (int.TryParse(val, out var n))
+                        {
+                            if (!set.MaxParentalRatingSub.HasValue || n > set.MaxParentalRatingSub.Value)
+                            {
+                                set.MaxParentalRatingSub = n;
+                            }
+                        }
+                    }
                     else if (token.StartsWith("rating:", StringComparison.OrdinalIgnoreCase))
                     {
                         var ratingStr = token["rating:".Length..];
@@ -175,6 +204,55 @@ public static class EntitlementParser
                             if (!set.MaxParentalRating.HasValue || rating > set.MaxParentalRating.Value)
                             {
                                 set.MaxParentalRating = rating;
+                            }
+                        }
+                    }
+                    else if (token.StartsWith("bitrate:", StringComparison.OrdinalIgnoreCase))
+                    {
+                        var val = token["bitrate:".Length..];
+                        if (val is "unlimited" or "none")
+                        {
+                            set.ClearRemoteClientBitrateLimit = true;
+                        }
+                        else if (int.TryParse(val, out var n))
+                        {
+                            // Highest cap wins (most permissive).
+                            if (!set.RemoteClientBitrateLimit.HasValue || n > set.RemoteClientBitrateLimit.Value)
+                            {
+                                set.RemoteClientBitrateLimit = n;
+                            }
+                        }
+                    }
+                    else if (token.StartsWith("sessions:", StringComparison.OrdinalIgnoreCase))
+                    {
+                        var val = token["sessions:".Length..];
+                        if (val is "unlimited" or "none")
+                        {
+                            // Jellyfin uses 0 to mean "no limit" for MaxActiveSessions.
+                            set.MaxActiveSessions = 0;
+                        }
+                        else if (int.TryParse(val, out var n) && n >= 0)
+                        {
+                            // 0 = unlimited; higher numeric value wins, but 0 (unlimited) trumps all.
+                            if (set.MaxActiveSessions != 0 &&
+                                (!set.MaxActiveSessions.HasValue || n > set.MaxActiveSessions.Value))
+                            {
+                                set.MaxActiveSessions = n;
+                            }
+                        }
+                    }
+                    else if (token.StartsWith("login-attempts:", StringComparison.OrdinalIgnoreCase))
+                    {
+                        var val = token["login-attempts:".Length..];
+                        if (val is "unlimited" or "none")
+                        {
+                            set.ClearLoginAttemptsBeforeLockout = true;
+                        }
+                        else if (int.TryParse(val, out var n) && n >= 0)
+                        {
+                            if (!set.LoginAttemptsBeforeLockout.HasValue || n > set.LoginAttemptsBeforeLockout.Value)
+                            {
+                                set.LoginAttemptsBeforeLockout = n;
                             }
                         }
                     }

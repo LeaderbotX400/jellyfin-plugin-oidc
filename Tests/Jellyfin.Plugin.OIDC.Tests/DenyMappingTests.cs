@@ -132,6 +132,13 @@ public class DenyMappingTests
                 Libraries: new List<string>(),
                 MaxParentalRating: null,
                 ClearMaxParentalRating: false,
+                MaxParentalRatingSub: null,
+                ClearMaxParentalRatingSub: false,
+                RemoteClientBitrateLimit: null,
+                ClearRemoteClientBitrateLimit: false,
+                MaxActiveSessions: null,
+                LoginAttemptsBeforeLockout: null,
+                ClearLoginAttemptsBeforeLockout: false,
                 MatchedGrantMappings: grantMappings.Select(m => m.RoleName).ToArray(),
                 MatchedDenyMappings: denyMappings.Select(m => m.RoleName).ToArray(),
                 ParsedEntitlements: entitlements);

@@ -173,6 +173,38 @@ public class RbacService
         {
             user.MaxParentalRatingScore = p.MaxParentalRating;
         }
+
+        if (p.ClearMaxParentalRatingSub)
+        {
+            user.MaxParentalRatingSubScore = null;
+        }
+        else if (p.MaxParentalRatingSub.HasValue)
+        {
+            user.MaxParentalRatingSubScore = p.MaxParentalRatingSub;
+        }
+
+        if (p.ClearRemoteClientBitrateLimit)
+        {
+            user.RemoteClientBitrateLimit = null;
+        }
+        else if (p.RemoteClientBitrateLimit.HasValue)
+        {
+            user.RemoteClientBitrateLimit = p.RemoteClientBitrateLimit;
+        }
+
+        if (p.MaxActiveSessions.HasValue)
+        {
+            user.MaxActiveSessions = p.MaxActiveSessions.Value;
+        }
+
+        if (p.ClearLoginAttemptsBeforeLockout)
+        {
+            user.LoginAttemptsBeforeLockout = null;
+        }
+        else if (p.LoginAttemptsBeforeLockout.HasValue)
+        {
+            user.LoginAttemptsBeforeLockout = p.LoginAttemptsBeforeLockout;
+        }
     }
 
     private List<string> ResolveLibraryIds(List<string> ids, List<string> names)
