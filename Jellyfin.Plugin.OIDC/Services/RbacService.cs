@@ -120,16 +120,28 @@ public class RbacService
         }
 
         Apply(PermissionKind.IsAdministrator, p.IsAdmin);
+        Apply(PermissionKind.IsDisabled, p.IsDisabled);
+        Apply(PermissionKind.IsHidden, p.IsHidden);
         Apply(PermissionKind.EnableMediaPlayback, p.EnableMediaPlayback);
         Apply(PermissionKind.EnableRemoteAccess, p.EnableRemoteAccess);
         Apply(PermissionKind.EnableAudioPlaybackTranscoding, p.EnableTranscoding);
         Apply(PermissionKind.EnableVideoPlaybackTranscoding, p.EnableTranscoding);
+        Apply(PermissionKind.EnableSyncTranscoding, p.EnableSyncTranscoding);
+        Apply(PermissionKind.ForceRemoteSourceTranscoding, p.ForceRemoteSourceTranscoding);
+        Apply(PermissionKind.EnablePlaybackRemuxing, p.EnablePlaybackRemuxing);
+        Apply(PermissionKind.EnableMediaConversion, p.EnableMediaConversion);
         Apply(PermissionKind.EnableLiveTvAccess, p.EnableLiveTv);
         Apply(PermissionKind.EnableLiveTvManagement, p.EnableLiveTvManagement);
         Apply(PermissionKind.EnableContentDeletion, p.EnableContentDeletion);
         Apply(PermissionKind.EnableCollectionManagement, p.EnableCollectionManagement);
         Apply(PermissionKind.EnableSubtitleManagement, p.EnableSubtitleManagement);
+        Apply(PermissionKind.EnableLyricManagement, p.EnableLyricManagement);
         Apply(PermissionKind.EnableContentDownloading, p.EnableDownload);
+        Apply(PermissionKind.EnableAllChannels, p.EnableAllChannels);
+        Apply(PermissionKind.EnableAllDevices, p.EnableAllDevices);
+        Apply(PermissionKind.EnableSharedDeviceControl, p.EnableSharedDeviceControl);
+        Apply(PermissionKind.EnableRemoteControlOfOtherUsers, p.EnableRemoteControlOfOtherUsers);
+        Apply(PermissionKind.EnablePublicSharing, p.EnablePublicSharing);
 
         // SyncPlay is a single tri-state column on the User entity; only write it when at least one
         // SyncPlay-related field has an opinion.

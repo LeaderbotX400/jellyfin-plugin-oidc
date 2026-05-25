@@ -95,6 +95,20 @@ public static class PermissionResolver
         }
 
         var isAdmin = Resolve(merged.IsAdmin, entSet.IsAdmin, deny?.IsAdmin);
+        // Entitlement-only permissions (no parallel field in RoleMapping). grant=false always.
+        var isDisabled = Resolve(false, entSet.IsDisabled, false);
+        var isHidden = Resolve(false, entSet.IsHidden, false);
+        var syncTranscode = Resolve(false, entSet.EnableSyncTranscoding, false);
+        var forceRemoteTranscode = Resolve(false, entSet.ForceRemoteSourceTranscoding, false);
+        var remux = Resolve(false, entSet.EnablePlaybackRemuxing, false);
+        var conversion = Resolve(false, entSet.EnableMediaConversion, false);
+        var lyric = Resolve(false, entSet.EnableLyricManagement, false);
+        var allChannels = Resolve(false, entSet.EnableAllChannels, false);
+        var allDevices = Resolve(false, entSet.EnableAllDevices, false);
+        var sharedDevice = Resolve(false, entSet.EnableSharedDeviceControl, false);
+        var remoteControl = Resolve(false, entSet.EnableRemoteControlOfOtherUsers, false);
+        var publicSharing = Resolve(false, entSet.EnablePublicSharing, false);
+
         var playback = Resolve(merged.EnableMediaPlayback, entSet.EnableMediaPlayback, deny?.EnableMediaPlayback);
         var remote = Resolve(merged.EnableRemoteAccess, entSet.EnableRemoteAccess, deny?.EnableRemoteAccess);
         var transcode = Resolve(merged.EnableTranscoding, entSet.EnableTranscoding, deny?.EnableTranscoding);
@@ -155,18 +169,30 @@ public static class PermissionResolver
 
         return new PermissionPreview(
             IsAdmin: isAdmin,
+            IsDisabled: isDisabled,
+            IsHidden: isHidden,
             EnableMediaPlayback: playback,
             EnableRemoteAccess: remote,
             EnableTranscoding: transcode,
+            EnableSyncTranscoding: syncTranscode,
+            ForceRemoteSourceTranscoding: forceRemoteTranscode,
+            EnablePlaybackRemuxing: remux,
+            EnableMediaConversion: conversion,
             EnableLiveTv: liveTv,
             EnableLiveTvManagement: liveTvMgmt,
             EnableContentDeletion: delete,
             EnableCollectionManagement: collections,
             EnableSubtitleManagement: subtitles,
+            EnableLyricManagement: lyric,
             EnableDownload: download,
             EnableSyncplay: syncplay,
             EnableSyncplayGroupCreation: syncplayHost,
             EnableAllLibraries: allLibs,
+            EnableAllChannels: allChannels,
+            EnableAllDevices: allDevices,
+            EnableSharedDeviceControl: sharedDevice,
+            EnableRemoteControlOfOtherUsers: remoteControl,
+            EnablePublicSharing: publicSharing,
             Libraries: libraries,
             MaxParentalRating: maxRating,
             ClearMaxParentalRating: clearRating,

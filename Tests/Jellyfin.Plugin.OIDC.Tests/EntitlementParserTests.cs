@@ -138,4 +138,37 @@ public class EntitlementParserTests
         Assert.True(set.EnableSubtitleManagement);
         Assert.True(set.EnableDownload);
     }
+
+    [Fact]
+    public void Parse_ExpandedVocabulary_AreParsed()
+    {
+        var entitlements = new[]
+        {
+            "jellyfin:disabled",
+            "jellyfin:hidden",
+            "jellyfin:transcoding:sync",
+            "jellyfin:transcoding:force-remote",
+            "jellyfin:remux",
+            "jellyfin:conversion",
+            "jellyfin:lyric:manage",
+            "jellyfin:channels:all",
+            "jellyfin:devices:all",
+            "jellyfin:devices:shared-control",
+            "jellyfin:remote-control",
+            "jellyfin:public-sharing",
+        };
+        var set = EntitlementParser.Parse(entitlements, "jellyfin:");
+        Assert.True(set.IsDisabled);
+        Assert.True(set.IsHidden);
+        Assert.True(set.EnableSyncTranscoding);
+        Assert.True(set.ForceRemoteSourceTranscoding);
+        Assert.True(set.EnablePlaybackRemuxing);
+        Assert.True(set.EnableMediaConversion);
+        Assert.True(set.EnableLyricManagement);
+        Assert.True(set.EnableAllChannels);
+        Assert.True(set.EnableAllDevices);
+        Assert.True(set.EnableSharedDeviceControl);
+        Assert.True(set.EnableRemoteControlOfOtherUsers);
+        Assert.True(set.EnablePublicSharing);
+    }
 }

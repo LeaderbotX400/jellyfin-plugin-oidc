@@ -10,18 +10,30 @@ namespace Jellyfin.Plugin.OIDC.Services;
 public class EntitlementSet
 {
     public bool IsAdmin { get; set; }
+    public bool IsDisabled { get; set; }
+    public bool IsHidden { get; set; }
     public bool EnableMediaPlayback { get; set; }
     public bool EnableRemoteAccess { get; set; }
     public bool EnableTranscoding { get; set; }
+    public bool EnableSyncTranscoding { get; set; }
+    public bool ForceRemoteSourceTranscoding { get; set; }
+    public bool EnablePlaybackRemuxing { get; set; }
+    public bool EnableMediaConversion { get; set; }
     public bool EnableLiveTv { get; set; }
     public bool EnableLiveTvManagement { get; set; }
     public bool EnableContentDeletion { get; set; }
     public bool EnableCollectionManagement { get; set; }
     public bool EnableSubtitleManagement { get; set; }
+    public bool EnableLyricManagement { get; set; }
     public bool EnableDownload { get; set; }
     public bool EnableSyncplay { get; set; }
     public bool EnableSyncplayGroupCreation { get; set; }
     public bool EnableAllLibraries { get; set; }
+    public bool EnableAllChannels { get; set; }
+    public bool EnableAllDevices { get; set; }
+    public bool EnableSharedDeviceControl { get; set; }
+    public bool EnableRemoteControlOfOtherUsers { get; set; }
+    public bool EnablePublicSharing { get; set; }
     public HashSet<string> LibraryNames { get; } = new(StringComparer.OrdinalIgnoreCase);
     public int? MaxParentalRating { get; set; }
 
@@ -67,6 +79,12 @@ public static class EntitlementParser
                 case "admin":
                     set.IsAdmin = true;
                     break;
+                case "disabled":
+                    set.IsDisabled = true;
+                    break;
+                case "hidden":
+                    set.IsHidden = true;
+                    break;
                 case "playback":
                     set.EnableMediaPlayback = true;
                     break;
@@ -75,6 +93,18 @@ public static class EntitlementParser
                     break;
                 case "transcoding":
                     set.EnableTranscoding = true;
+                    break;
+                case "transcoding:sync":
+                    set.EnableSyncTranscoding = true;
+                    break;
+                case "transcoding:force-remote":
+                    set.ForceRemoteSourceTranscoding = true;
+                    break;
+                case "remux":
+                    set.EnablePlaybackRemuxing = true;
+                    break;
+                case "conversion":
+                    set.EnableMediaConversion = true;
                     break;
                 case "livetv":
                     set.EnableLiveTv = true;
@@ -92,6 +122,9 @@ public static class EntitlementParser
                 case "subtitle:manage":
                     set.EnableSubtitleManagement = true;
                     break;
+                case "lyric:manage":
+                    set.EnableLyricManagement = true;
+                    break;
                 case "download":
                     set.EnableDownload = true;
                     break;
@@ -104,6 +137,21 @@ public static class EntitlementParser
                     break;
                 case "library:all":
                     set.EnableAllLibraries = true;
+                    break;
+                case "channels:all":
+                    set.EnableAllChannels = true;
+                    break;
+                case "devices:all":
+                    set.EnableAllDevices = true;
+                    break;
+                case "devices:shared-control":
+                    set.EnableSharedDeviceControl = true;
+                    break;
+                case "remote-control":
+                    set.EnableRemoteControlOfOtherUsers = true;
+                    break;
+                case "public-sharing":
+                    set.EnablePublicSharing = true;
                     break;
                 default:
                     if (token.StartsWith("library:", StringComparison.OrdinalIgnoreCase))
