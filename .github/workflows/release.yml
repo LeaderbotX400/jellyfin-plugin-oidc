@@ -38,31 +38,22 @@ jobs:
         run: |
           CHECKSUM=$(md5sum oidc-rbac.zip | cut -d' ' -f1)
           TIMESTAMP=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
-          VERSION="${{ steps.version.outputs.version }}"
+          VERSION="${{ steps.version.outputs.version }}.0"
           DOWNLOAD_URL="https://github.com/${{ github.repository }}/releases/download/${GITHUB_REF_NAME}/oidc-rbac.zip"
 
-          cat > manifest.json <<EOF
-          [
-            {
-              "guid": "d4e5f6a7-b8c9-0d1e-2f3a-4b5c6d7e8f90",
-              "name": "OIDC RBAC",
-              "description": "Advanced OIDC authentication with role-based library access control",
-              "overview": "OpenID Connect SSO with role-to-library mapping, multi-provider support, and admin UI.",
-              "owner": "LeaderbotX400",
-              "category": "Authentication",
-              "versions": [
-                {
-                  "version": "${VERSION}.0",
-                  "changelog": "Release ${GITHUB_REF_NAME}",
-                  "targetAbi": "10.11.0.0",
-                  "sourceUrl": "${DOWNLOAD_URL}",
-                  "checksum": "${CHECKSUM}",
-                  "timestamp": "${TIMESTAMP}"
-                }
-              ]
-            }
-          ]
-          EOF
+          NEW_ENTRY=$(jq -n \
+            --arg v "$VERSION" \
+            --arg c "Release ${GITHUB_REF_NAME}" \
+            --arg u "$DOWNLOAD_URL" \
+            --arg h "$CHECKSUM" \
+            --arg t "$TIMESTAMP" \
+            '{version: $v, changelog: $c, targetAbi: "10.11.0.0", sourceUrl: $u, checksum: $h, timestamp: $t}')
+
+          # Prepend new version to existing manifest, deduping by version (re-tag overwrites)
+          jq --argjson new "$NEW_ENTRY" --arg v "$VERSION" '
+            .[0].versions = ([$new] + (.[0].versions | map(select(.version != $v))))
+          ' manifest.json > manifest.json.new
+          mv manifest.json.new manifest.json
 
       - name: Create release
         uses: softprops/action-gh-release@v2
@@ -76,8 +67,23 @@ jobs:
           git config user.email "github-actions[bot]@users.noreply.github.com"
           cp manifest.json /tmp/manifest.json
           git fetch origin main
-          git checkout main
+          # -f discards the dirty manifest.json we wrote into the tag-checkout
+          git checkout -f main
           cp /tmp/manifest.json manifest.json
           git add manifest.json
-          git commit -m "Update manifest.json for ${GITHUB_REF_NAME}" || echo "No changes"
-          git push origin main
+          if git diff --cached --quiet; then
+            echo "No manifest changes to commit"
+            exit 0
+          fi
+          git commit -m "Update manifest.json for ${GITHUB_REF_NAME}"
+          # Retry to survive concurrent pushes to main during the build
+          for i in 1 2 3; do
+            if git push origin main; then
+              exit 0
+            fi
+            echo "Push failed, rebasing and retrying ($i/3)..."
+            git pull --rebase origin main || true
+            sleep $((i * 2))
+          done
+          echo "::error::Failed to push manifest update after 3 attempts"
+          exit 1
