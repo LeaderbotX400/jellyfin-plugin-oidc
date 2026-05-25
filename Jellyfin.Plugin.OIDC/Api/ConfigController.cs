@@ -3,6 +3,7 @@ using System.Linq;
 using System.Net.Http;
 using System.Threading.Tasks;
 using IdentityModel.Client;
+using Jellyfin.Plugin.OIDC.Configuration;
 using Jellyfin.Plugin.OIDC.Services;
 using MediaBrowser.Common.Api;
 using Microsoft.AspNetCore.Authorization;
@@ -27,6 +28,33 @@ public class ConfigController : ControllerBase
         _rbacService = rbacService;
         _httpClientFactory = httpClientFactory;
         _configProvider = configProvider;
+    }
+
+    /// <summary>
+    /// Returns the plugin configuration with all secret fields replaced by
+    /// <see cref="ConfigMasking.Sentinel"/>. The admin UI must use this
+    /// endpoint instead of the standard /Plugins/{id}/Configuration route,
+    /// which exposes secrets in plaintext.
+    /// </summary>
+    [HttpGet]
+    public ActionResult<PluginConfiguration> GetConfig()
+    {
+        var config = _configProvider.GetConfiguration();
+        return Ok(ConfigMasking.Mask(config));
+    }
+
+    /// <summary>
+    /// Saves the plugin configuration. For each secret field, a value of
+    /// <see cref="ConfigMasking.Sentinel"/> means "keep the existing secret";
+    /// an empty string clears the secret; any other value overwrites it.
+    /// </summary>
+    [HttpPost]
+    public ActionResult SaveConfig([FromBody] PluginConfiguration incoming)
+    {
+        var persisted = _configProvider.GetConfiguration();
+        ConfigMasking.MergeSecrets(incoming, persisted);
+        _configProvider.SaveConfiguration(incoming);
+        return NoContent();
     }
 
     [HttpGet("Libraries")]

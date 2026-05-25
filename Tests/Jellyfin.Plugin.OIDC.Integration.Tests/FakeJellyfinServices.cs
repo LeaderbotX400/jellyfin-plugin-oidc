@@ -104,4 +104,5 @@ public sealed class TestPluginConfigProvider : IPluginConfigProvider
 {
     public Configuration.PluginConfiguration Configuration { get; set; } = new();
     public Configuration.PluginConfiguration GetConfiguration() => Configuration;
+    public void SaveConfiguration(Configuration.PluginConfiguration config) => Configuration = config;
 }
