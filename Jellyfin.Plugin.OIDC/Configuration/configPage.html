@@ -99,6 +99,21 @@
                             <span>Auto-create users on first OIDC/SAML login</span>
                         </label>
                     </div>
+
+                    <div class="oidc-grid" style="margin-top:1em;">
+                        <div class="oidc-field full">
+                            <label class="inputLabel inputLabelUnfocused" for="rbacBehavior">RBAC Behavior</label>
+                            <select id="rbacBehavior" is="emby-select" class="emby-select">
+                                <option value="EntitlementsAuthoritative">Authoritative — plugin owns every permission (default)</option>
+                                <option value="RespectExistingWhenUnspecified">Respect existing — only write what RBAC or entitlements actually opined on</option>
+                            </select>
+                            <div class="fieldDescription" style="margin-top:0.4em;">
+                                <strong>Authoritative</strong> overwrites every covered permission on each login — anything not granted by an entitlement or role mapping is set to off / cleared. Backwards-compatible with all existing setups.
+                                <br />
+                                <strong>Respect existing</strong> keeps that behavior when entitlements are present, but in the role-only path leaves any field the matched mappings didn't explicitly grant (and no deny mapping touched) at whatever Jellyfin already has on the user. Use this when you want roles to bootstrap a user and Jellyfin admins to manage the rest.
+                            </div>
+                        </div>
+                    </div>
                 </div>
             </div>
 
