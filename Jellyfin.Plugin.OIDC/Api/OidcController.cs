@@ -244,6 +244,7 @@ public class OidcController : ControllerBase
         }
 
         var sub = ClaimParser.ExtractClaim(idToken, "sub");
+        var sid = ClaimParser.ExtractClaim(idToken, "sid") ?? string.Empty;
         var username = ClaimParser.ExtractClaim(idToken, provider.UsernameClaim);
         if (string.IsNullOrEmpty(username))
         {
@@ -293,6 +294,7 @@ public class OidcController : ControllerBase
             Username = username,
             DisplayName = displayName,
             Sub = sub,
+            Sid = sid,
             Roles = roles,
             Entitlements = entitlements,
             LinkUserId = oidcState.LinkingForUserId,
@@ -352,6 +354,12 @@ public class OidcController : ControllerBase
             };
 
             var authResult = await _sessionManager.AuthenticateDirect(authRequest).ConfigureAwait(false);
+
+            if (!string.IsNullOrEmpty(session.Sid))
+            {
+                await _userStore.RecordSidAsync(userId, session.Sid, authRequest.DeviceId)
+                    .ConfigureAwait(false);
+            }
 
             await _rbacService.LogActivityAsync(
                 $"OIDC login: {session.Username}",

@@ -26,6 +26,7 @@ public sealed class AuthorizedSession
     public string? DisplayName { get; init; }
     public required string[] Roles { get; init; }
     public string Sub { get; init; } = string.Empty;
+    public string Sid { get; init; } = string.Empty;
     public string[] Entitlements { get; init; } = Array.Empty<string>();
     public DateTimeOffset CreatedAt { get; init; } = DateTimeOffset.UtcNow;
 
