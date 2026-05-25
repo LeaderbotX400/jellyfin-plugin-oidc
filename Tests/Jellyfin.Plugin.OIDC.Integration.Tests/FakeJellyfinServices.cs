@@ -56,6 +56,10 @@ public static class FakeJellyfinFactory
         mock.Setup(m => m.ChangePassword(It.IsAny<User>(), It.IsAny<string>()))
             .Returns(Task.CompletedTask);
 
+        // Users property — needed by last-admin lockout check in RbacService
+        mock.Setup(m => m.Users)
+            .Returns(() => store.ById.Values.AsQueryable());
+
         return mock;
     }
 

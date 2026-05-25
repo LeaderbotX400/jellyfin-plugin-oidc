@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using System.IO;
 using System.Threading;
 using System.Threading.Tasks;
+using Jellyfin.Data;
 using Jellyfin.Database.Implementations.Enums;
 using Jellyfin.Plugin.OIDC.Configuration;
 using Jellyfin.Plugin.OIDC.Services;
@@ -115,6 +116,71 @@ public sealed class RbacResyncTaskTests
 
         // Progress reporting is async; we just need to confirm the task didn't throw
         // and exited the early-return path. No assertion on progress count.
+    }
+
+    /// <summary>
+    /// Resync of the only admin: the admin bit must be preserved and an activity-log entry must be created.
+    /// </summary>
+    [Fact]
+    public async Task ExecuteAsync_LastAdminDemotion_PreservesAdminBitAndLogsActivity()
+    {
+        var userStore = new FakeUserStore();
+        // alice is the sole admin
+        var alice = userStore.CreateUser("alice");
+        alice.SetPermission(PermissionKind.IsAdministrator, true);
+
+        var oidcStore = new OidcUserStore(Path.Combine(Path.GetTempPath(), $"resync-lastadmin-{Guid.NewGuid():N}.json"));
+        await oidcStore.UpsertAsync(new OidcUserRecord
+        {
+            UserId = alice.Id,
+            Username = "alice",
+            Sub = "sub-alice",
+            ProviderId = "idp",
+            // "user" role maps to IsAdmin=false — which would demote her
+            Roles = new[] { "user" },
+            Entitlements = Array.Empty<string>()
+        });
+
+        var configProvider = new TestPluginConfigProvider
+        {
+            Configuration = new PluginConfiguration
+            {
+                AllowLastAdminDemotion = false,
+                RoleMappings = new List<RoleMapping>
+                {
+                    new() { RoleName = "user", IsAdmin = false, EnableMediaPlayback = true }
+                }
+            }
+        };
+
+        var activityManager = FakeJellyfinFactory.CreateActivityManager();
+        var services = new ServiceCollection();
+        services.AddSingleton(oidcStore);
+        services.AddSingleton(FakeJellyfinFactory.CreateUserManager(userStore).Object);
+        services.AddSingleton(FakeJellyfinFactory.CreateLibraryManager().Object);
+        services.AddSingleton(activityManager.Object);
+        services.AddSingleton<IPluginConfigProvider>(configProvider);
+        services.AddLogging();
+        services.AddScoped<RbacService>();
+        var sp = services.BuildServiceProvider();
+
+        var task = new RbacResyncTask(
+            sp.GetRequiredService<IServiceScopeFactory>(),
+            oidcStore,
+            NullLogger<RbacResyncTask>.Instance);
+
+        await task.ExecuteAsync(new Progress<double>(), CancellationToken.None);
+
+        // Admin bit must be preserved even though the role mapping says IsAdmin=false
+        Assert.True(HasPermission(alice, PermissionKind.IsAdministrator),
+            "Last-admin bit must be preserved during resync");
+
+        // An activity log entry must have been written for the block event
+        activityManager.Verify(
+            m => m.CreateAsync(It.Is<Jellyfin.Database.Implementations.Entities.ActivityLog>(
+                entry => entry.Name.Contains("last-admin", StringComparison.OrdinalIgnoreCase))),
+            Times.AtLeastOnce,
+            "Expected an activity-log entry for the last-admin block event");
     }
 
     private static bool HasPermission(Jellyfin.Database.Implementations.Entities.User user, PermissionKind kind)

@@ -25,6 +25,8 @@
     <!-- Pull Jellyfin runtime assemblies so we can instantiate the plugin's controllers -->
     <PackageReference Include="Jellyfin.Controller" Version="10.11.3" />
     <PackageReference Include="Jellyfin.Model" Version="10.11.3" />
+    <!-- Provides SetPermission/HasPermission extension methods on User entities -->
+    <PackageReference Include="Jellyfin.Data" Version="10.11.3" />
   </ItemGroup>
 
   <ItemGroup>

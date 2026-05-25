@@ -182,6 +182,13 @@ public class PluginConfiguration : BasePluginConfiguration
     /// </summary>
     [JsonConverter(typeof(JsonStringEnumConverter))]
     public RbacBehaviorMode RbacBehavior { get; set; } = RbacBehaviorMode.EntitlementsAuthoritative;
+
+    /// <summary>
+    /// When false (default), the plugin refuses to demote the last remaining Jellyfin administrator
+    /// via RBAC. Set to true only as a deliberate escape hatch (e.g. you are demoting yourself and
+    /// have another way in). Reset to false after use.
+    /// </summary>
+    public bool AllowLastAdminDemotion { get; set; } = false;
 }
 
 /// <summary>

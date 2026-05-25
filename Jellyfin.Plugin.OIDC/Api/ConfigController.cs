@@ -98,6 +98,45 @@ public class ConfigController : ControllerBase
         });
     }
 
+    /// <summary>
+    /// Validates a proposed configuration and returns any warnings. Does not save.
+    /// Called automatically by the UI on every save to surface issues without blocking.
+    /// </summary>
+    [HttpPost("ValidateConfig")]
+    public ActionResult ValidateConfig([FromBody] PluginConfiguration proposedConfig)
+    {
+        var warnings = new List<string>();
+
+        if (proposedConfig?.Providers != null && proposedConfig.RoleMappings != null)
+        {
+            // Collect role names of all grant mappings that confer admin.
+            var adminRoleNames = proposedConfig.RoleMappings
+                .Where(m => !m.IsExplicitDeny && m.IsAdmin)
+                .Select(m => m.RoleName)
+                .ToHashSet(StringComparer.OrdinalIgnoreCase);
+
+            foreach (var provider in proposedConfig.Providers)
+            {
+                foreach (var transform in provider.RoleTransforms ?? new List<ClaimTransform>())
+                {
+                    if (!string.IsNullOrWhiteSpace(transform.ToValue) &&
+                        adminRoleNames.Contains(transform.ToValue))
+                    {
+                        var msg = $"Provider '{provider.ProviderId}': transform from='{transform.FromValue}' " +
+                                  $"to='{transform.ToValue}' maps into an admin role mapping. " +
+                                  "Any IdP user with the '{transform.FromValue}' role will become a Jellyfin administrator.";
+                        warnings.Add(msg);
+                        _logger.LogWarning(
+                            "Config warning: provider={Provider} transform from={From} to={To} targets admin role",
+                            provider.ProviderId, transform.FromValue, transform.ToValue);
+                    }
+                }
+            }
+        }
+
+        return Ok(new { Warnings = warnings });
+    }
+
     [HttpPost("TestProvider")]
     public async Task<ActionResult> TestProvider([FromBody] ProviderTestRequest request)
     {

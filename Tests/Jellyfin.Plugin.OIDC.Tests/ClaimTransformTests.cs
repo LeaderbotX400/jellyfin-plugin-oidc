@@ -1,9 +1,39 @@
+using System;
 using System.Collections.Generic;
+using System.Linq;
 using Jellyfin.Plugin.OIDC.Configuration;
 using Jellyfin.Plugin.OIDC.Services;
+using Microsoft.Extensions.Logging;
 using Xunit;
 
 namespace Jellyfin.Plugin.OIDC.Tests;
+
+// ── Minimal fake logger that records calls ────────────────────────────────────
+
+public sealed class FakeLogger : ILogger
+{
+    private readonly List<(LogLevel Level, string Message)> _entries = new();
+
+    public IReadOnlyList<(LogLevel Level, string Message)> Entries => _entries;
+
+    public IDisposable? BeginScope<TState>(TState state) where TState : notnull => null;
+    public bool IsEnabled(LogLevel logLevel) => true;
+
+    public void Log<TState>(
+        LogLevel logLevel,
+        EventId eventId,
+        TState state,
+        Exception? exception,
+        Func<TState, Exception?, string> formatter)
+    {
+        _entries.Add((logLevel, formatter(state, exception)));
+    }
+
+    public bool HasEntry(LogLevel level, string containing) =>
+        _entries.Any(e => e.Level == level && e.Message.Contains(containing, StringComparison.OrdinalIgnoreCase));
+}
+
+// ── Tests ─────────────────────────────────────────────────────────────────────
 
 public class ClaimTransformTests
 {
@@ -77,5 +107,89 @@ public class ClaimTransformTests
         };
         var result = ClaimParser.ApplyTransforms(new[] { "admin" }, transforms);
         Assert.Equal(new[] { "superadmin" }, result);
+    }
+
+    // ── Logging tests ──────────────────────────────────────────────────────────
+
+    [Fact]
+    public void ApplyTransforms_LogsInfoOnApply()
+    {
+        var logger = new FakeLogger();
+        var transforms = new List<ClaimTransform>
+        {
+            new() { FromValue = "cn=admins,dc=org", ToValue = "admin" }
+        };
+
+        ClaimParser.ApplyTransforms(new[] { "cn=admins,dc=org" }, transforms, "myprovider", logger);
+
+        Assert.True(logger.HasEntry(LogLevel.Information, "transform applied"),
+            "Expected an Info log for the applied transform");
+        // Log must reference the transform rule names, not opaque token data
+        Assert.True(logger.HasEntry(LogLevel.Information, "cn=admins,dc=org"),
+            "Log should contain FromValue");
+        Assert.True(logger.HasEntry(LogLevel.Information, "admin"),
+            "Log should contain ToValue");
+        Assert.True(logger.HasEntry(LogLevel.Information, "myprovider"),
+            "Log should contain provider id");
+    }
+
+    [Fact]
+    public void ApplyTransforms_LogsWarningOnDrop()
+    {
+        var logger = new FakeLogger();
+        var transforms = new List<ClaimTransform>
+        {
+            new() { FromValue = "legacy-role", ToValue = "" }
+        };
+
+        ClaimParser.ApplyTransforms(new[] { "legacy-role" }, transforms, "myprovider", logger);
+
+        Assert.True(logger.HasEntry(LogLevel.Warning, "dropped"),
+            "Expected a Warning log for the dropped role");
+        Assert.True(logger.HasEntry(LogLevel.Warning, "legacy-role"),
+            "Log should contain the dropped role identifier (FromValue)");
+    }
+
+    [Fact]
+    public void ApplyTransforms_WhitespaceToValue_DropsAndLogsWarning()
+    {
+        var logger = new FakeLogger();
+        var transforms = new List<ClaimTransform>
+        {
+            new() { FromValue = "test-role", ToValue = "   " }
+        };
+
+        var result = ClaimParser.ApplyTransforms(new[] { "test-role" }, transforms, "p", logger);
+
+        Assert.Empty(result);
+        Assert.True(logger.HasEntry(LogLevel.Warning, "dropped"));
+    }
+
+    [Fact]
+    public void ApplyTransforms_NoLogger_DoesNotThrow()
+    {
+        var transforms = new List<ClaimTransform>
+        {
+            new() { FromValue = "x", ToValue = "y" }
+        };
+
+        // Should work fine with null logger (no-op)
+        var result = ClaimParser.ApplyTransforms(new[] { "x" }, transforms, "p", null);
+        Assert.Equal(new[] { "y" }, result);
+    }
+
+    [Fact]
+    public void ApplyTransforms_UnmatchedValue_DoesNotLog()
+    {
+        var logger = new FakeLogger();
+        var transforms = new List<ClaimTransform>
+        {
+            new() { FromValue = "other", ToValue = "y" }
+        };
+
+        ClaimParser.ApplyTransforms(new[] { "admin" }, transforms, "p", logger);
+
+        // Unmatched values pass through silently
+        Assert.Empty(logger.Entries);
     }
 }

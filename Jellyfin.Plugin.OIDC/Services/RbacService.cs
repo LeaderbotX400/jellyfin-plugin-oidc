@@ -60,7 +60,33 @@ public class RbacService
             return;
         }
 
-        ApplyToUser(user, preview);
+        // Last-admin lockout protection: if the computed preview would demote this user from admin,
+        // check whether any other admin exists. If not, refuse to clear the bit (unless the config
+        // escape hatch is enabled). All other permissions are still applied normally.
+        bool? effectiveIsAdmin = preview.IsAdmin;
+        bool currentlyAdmin = user.HasPermission(Jellyfin.Database.Implementations.Enums.PermissionKind.IsAdministrator);
+        if (currentlyAdmin && preview.IsAdmin == false && !config.AllowLastAdminDemotion)
+        {
+            int remainingAdmins = _userManager.Users
+                .Count(u => u.Id != userId &&
+                            u.HasPermission(Jellyfin.Database.Implementations.Enums.PermissionKind.IsAdministrator));
+            if (remainingAdmins == 0)
+            {
+                _logger.LogError(
+                    "Refusing to demote user={UserId} username={Username} reason=last_admin",
+                    userId, user.Username);
+                await LogActivityAsync(
+                    "OIDC plugin: last-admin demotion blocked",
+                    "OidcLastAdminBlocked",
+                    userId,
+                    $"OIDC RBAC would have removed administrator rights from {user.Username} but they are the last admin. Set AllowLastAdminDemotion=true in plugin config to override.",
+                    Microsoft.Extensions.Logging.LogLevel.Warning).ConfigureAwait(false);
+                // Preserve the admin bit; all other permission fields are applied normally below.
+                effectiveIsAdmin = true;
+            }
+        }
+
+        ApplyToUser(user, preview, effectiveIsAdmin);
         await _userManager.UpdateUserAsync(user).ConfigureAwait(false);
 
         string adminStr = preview.IsAdmin?.ToString() ?? "unchanged";
@@ -112,14 +138,22 @@ public class RbacService
         return PermissionResolver.Resolve(userRoles, entitlements, providerId, config, ResolveLibraryIds);
     }
 
-    private void ApplyToUser(Jellyfin.Database.Implementations.Entities.User user, PermissionPreview p)
+    /// <param name="effectiveIsAdmin">
+    /// Overrides <c>p.IsAdmin</c> for the IsAdministrator bit only. Pass <c>null</c> to use
+    /// <c>p.IsAdmin</c> unmodified. The last-admin lockout guard sets this to <c>true</c> when it
+    /// refuses to demote; all other permissions in <paramref name="p"/> are applied normally.
+    /// </param>
+    private void ApplyToUser(
+        Jellyfin.Database.Implementations.Entities.User user,
+        PermissionPreview p,
+        bool? effectiveIsAdmin = null)
     {
         void Apply(PermissionKind kind, bool? value)
         {
             if (value.HasValue) user.SetPermission(kind, value.Value);
         }
 
-        Apply(PermissionKind.IsAdministrator, p.IsAdmin);
+        Apply(PermissionKind.IsAdministrator, effectiveIsAdmin ?? p.IsAdmin);
         Apply(PermissionKind.IsDisabled, p.IsDisabled);
         Apply(PermissionKind.IsHidden, p.IsHidden);
         Apply(PermissionKind.EnableMediaPlayback, p.EnableMediaPlayback);
