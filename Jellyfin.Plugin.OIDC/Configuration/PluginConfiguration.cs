@@ -1,9 +1,164 @@
 using System;
 using System.Collections.Generic;
+using System.Linq;
+using System.Reflection;
 using System.Text.Json.Serialization;
 using MediaBrowser.Model.Plugins;
 
 namespace Jellyfin.Plugin.OIDC.Configuration;
+
+/// <summary>
+/// Marks a string property as a secret. The masking helper replaces non-empty
+/// values with <see cref="ConfigMasking.Sentinel"/> when serializing to the
+/// admin UI, and merges back the sentinel on save.
+/// </summary>
+[AttributeUsage(AttributeTargets.Property)]
+public sealed class SecretAttribute : Attribute { }
+
+/// <summary>Sentinel value and masking/merge helpers for secret fields.</summary>
+public static class ConfigMasking
+{
+    /// <summary>Placeholder sent to the UI in place of an actual secret.</summary>
+    public const string Sentinel = "__UNCHANGED__";
+
+    /// <summary>
+    /// Returns a deep copy of <paramref name="config"/> with all
+    /// <see cref="SecretAttribute"/>-annotated string properties replaced by
+    /// <see cref="Sentinel"/> (only when the value is non-empty).
+    /// </summary>
+    public static PluginConfiguration Mask(PluginConfiguration config)
+    {
+        var masked = new PluginConfiguration
+        {
+            DefaultProvider = config.DefaultProvider,
+            AutoCreateUsers = config.AutoCreateUsers,
+            DefaultRoleName = config.DefaultRoleName,
+            RoleMappings = config.RoleMappings.Select(m => new RoleMapping
+            {
+                RoleName = m.RoleName,
+                ProviderId = m.ProviderId,
+                IsExplicitDeny = m.IsExplicitDeny,
+                IsAdmin = m.IsAdmin,
+                EnableAllLibraries = m.EnableAllLibraries,
+                LibraryIds = new List<string>(m.LibraryIds),
+                LibraryNames = new List<string>(m.LibraryNames),
+                EnableLiveTv = m.EnableLiveTv,
+                EnableLiveTvManagement = m.EnableLiveTvManagement,
+                EnableMediaPlayback = m.EnableMediaPlayback,
+                EnableRemoteAccess = m.EnableRemoteAccess,
+                EnableTranscoding = m.EnableTranscoding,
+                EnableContentDeletion = m.EnableContentDeletion,
+                EnableCollectionManagement = m.EnableCollectionManagement,
+                EnableSubtitleManagement = m.EnableSubtitleManagement,
+                EnableDownload = m.EnableDownload,
+                EnableSyncplay = m.EnableSyncplay,
+                EnableSyncplayGroupCreation = m.EnableSyncplayGroupCreation,
+                MaxParentalRating = m.MaxParentalRating,
+                Priority = m.Priority
+            }).ToList(),
+            SamlProviders = config.SamlProviders.Select(s => new SamlProviderConfig
+            {
+                Id = s.Id,
+                DisplayName = s.DisplayName,
+                EntityId = s.EntityId,
+                SsoUrl = s.SsoUrl,
+                IdpCertificate = s.IdpCertificate,
+                UsernameClaim = s.UsernameClaim,
+                RoleClaim = s.RoleClaim,
+                Enabled = s.Enabled,
+                ButtonColor = s.ButtonColor
+            }).ToList(),
+            Providers = config.Providers.Select(p =>
+            {
+                var copy = new OidcProviderConfig
+                {
+                    ProviderId = p.ProviderId,
+                    DisplayName = p.DisplayName,
+                    Authority = p.Authority,
+                    ClientId = p.ClientId,
+                    ClientSecret = p.ClientSecret,
+                    Scopes = p.Scopes,
+                    RoleClaim = p.RoleClaim,
+                    UsernameClaim = p.UsernameClaim,
+                    DisplayNameClaim = p.DisplayNameClaim,
+                    Enabled = p.Enabled,
+                    ButtonColor = p.ButtonColor,
+                    ButtonIcon = p.ButtonIcon,
+                    AdditionalParameters = p.AdditionalParameters,
+                    EntitlementClaim = p.EntitlementClaim,
+                    EntitlementPrefix = p.EntitlementPrefix,
+                    EnableEntitlements = p.EnableEntitlements,
+                    RequireEmailVerified = p.RequireEmailVerified,
+                    RoleTransforms = p.RoleTransforms.Select(t => new ClaimTransform
+                    {
+                        FromValue = t.FromValue,
+                        ToValue = t.ToValue
+                    }).ToList()
+                };
+                MaskSecretProperties(copy);
+                return copy;
+            }).ToList()
+        };
+        return masked;
+    }
+
+    /// <summary>
+    /// Merges incoming (possibly sentinel-containing) values from
+    /// <paramref name="incoming"/> into <paramref name="persisted"/>.
+    /// For each <see cref="SecretAttribute"/> property: if the incoming
+    /// value equals <see cref="Sentinel"/>, the persisted value is kept;
+    /// an empty string explicitly clears the secret; any other value overwrites.
+    /// </summary>
+    public static void MergeSecrets(PluginConfiguration incoming, PluginConfiguration persisted)
+    {
+        for (var i = 0; i < incoming.Providers.Count; i++)
+        {
+            // Match by index — the UI preserves provider order
+            var inProv = incoming.Providers[i];
+            var persistedProv = i < persisted.Providers.Count
+                ? persisted.Providers.FirstOrDefault(p =>
+                    string.Equals(p.ProviderId, inProv.ProviderId, StringComparison.Ordinal))
+                  ?? (i < persisted.Providers.Count ? persisted.Providers[i] : null)
+                : null;
+
+            if (persistedProv is null) continue;
+            MergeSecretProperties(inProv, persistedProv);
+        }
+    }
+
+    // ── Reflection helpers ────────────────────────────────────────────────────
+
+    private static readonly BindingFlags PropFlags =
+        BindingFlags.Public | BindingFlags.Instance;
+
+    private static void MaskSecretProperties(object obj)
+    {
+        foreach (var prop in obj.GetType().GetProperties(PropFlags))
+        {
+            if (prop.GetCustomAttribute<SecretAttribute>() is null) continue;
+            if (prop.PropertyType != typeof(string)) continue;
+            var current = (string?)prop.GetValue(obj);
+            if (!string.IsNullOrEmpty(current))
+                prop.SetValue(obj, Sentinel);
+        }
+    }
+
+    private static void MergeSecretProperties(object incoming, object persisted)
+    {
+        foreach (var prop in incoming.GetType().GetProperties(PropFlags))
+        {
+            if (prop.GetCustomAttribute<SecretAttribute>() is null) continue;
+            if (prop.PropertyType != typeof(string)) continue;
+            var inVal = (string?)prop.GetValue(incoming);
+            if (inVal == Sentinel)
+            {
+                // Keep the persisted secret
+                prop.SetValue(incoming, prop.GetValue(persisted));
+            }
+            // Empty string or any other value: use as-is (clear or overwrite)
+        }
+    }
+}
 
 public class PluginConfiguration : BasePluginConfiguration
 {
@@ -56,6 +211,7 @@ public class OidcProviderConfig
 
     public string ClientId { get; set; } = string.Empty;
 
+    [Secret]
     public string ClientSecret { get; set; } = string.Empty;
 
     public string Scopes { get; set; } = "openid profile email";

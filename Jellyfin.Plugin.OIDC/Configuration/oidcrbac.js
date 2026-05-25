@@ -101,7 +101,8 @@ function renderProviders(view) {
                 fld('Display Name', 'text', 'prov_name_' + idx, p.DisplayName, 'Shown on login button') +
                 fld('Authority URL', 'text', 'prov_authority_' + idx, p.Authority, 'https://idp.example.com/realms/myrealm', true) +
                 fld('Client ID', 'text', 'prov_clientid_' + idx, p.ClientId, '') +
-                fld('Client Secret', 'password', 'prov_secret_' + idx, p.ClientSecret, '') +
+                fld('Client Secret', 'password', 'prov_secret_' + idx, p.ClientSecret,
+                    p.ClientSecret === '__UNCHANGED__' ? 'leave unchanged to keep existing secret' : '') +
                 fld('Scopes', 'text', 'prov_scopes_' + idx, p.Scopes || 'openid profile email', '', true) +
                 '</div>') +
             section('Claims', '<div class="oidc-grid">' +
@@ -424,7 +425,7 @@ export default function (view) {
         }).catch(function () {
             libs = {};
         }).then(function () {
-            return ApiClient.getPluginConfiguration(pluginId);
+            return ApiClient.getJSON(ApiClient.getUrl('sso/OIDC/Config'));
         }).then(function (config) {
             cfg = config;
             cfg.Providers = cfg.Providers || [];
@@ -524,12 +525,17 @@ export default function (view) {
         cfg.DefaultRoleName = gval(view, 'defaultRoleName');
         cfg.AutoCreateUsers = gchk(view, 'autoCreateUsers');
         cfg.RbacBehavior = view.querySelector('#rbacBehavior').value || 'EntitlementsAuthoritative';
-        ApiClient.updatePluginConfiguration(pluginId, cfg).then(function (result) {
-            Dashboard.processPluginConfigurationUpdateResult(result);
+        ApiClient.ajax({
+            type: 'POST',
+            url: ApiClient.getUrl('sso/OIDC/Config'),
+            data: JSON.stringify(cfg),
+            contentType: 'application/json'
+        }).then(function () {
             Dashboard.hideLoadingMsg();
+            Dashboard.alert('Settings saved.');
         }).catch(function (err) {
             Dashboard.hideLoadingMsg();
-            Dashboard.alert('Failed to save: ' + (err.message || err));
+            Dashboard.alert('Failed to save: ' + ((err && err.message) || err));
         });
     });
 
