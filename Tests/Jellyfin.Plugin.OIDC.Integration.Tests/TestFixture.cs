@@ -25,6 +25,7 @@ internal sealed class TestFixture
     public OidcDiscoveryCache DiscoveryCache { get; }
     public StateManager StateManager { get; }
     public LogoutTokenReplayCache ReplayCache { get; }
+    public SamlAssertionReplayCache SamlReplayCache { get; }
 
     public TestFixture(MockIdpFixture idp)
     {
@@ -41,6 +42,7 @@ internal sealed class TestFixture
         DiscoveryCache = new OidcDiscoveryCache(httpFactory, NullLogger<OidcDiscoveryCache>.Instance);
         StateManager = new StateManager(NullLogger<StateManager>.Instance);
         ReplayCache = new LogoutTokenReplayCache(NullLogger<LogoutTokenReplayCache>.Instance);
+        SamlReplayCache = new SamlAssertionReplayCache(NullLogger<SamlAssertionReplayCache>.Instance);
 
         RbacService = new RbacService(
             userManagerMock.Object,
@@ -79,6 +81,7 @@ internal sealed class TestFixture
             StateManager,
             RbacService,
             ConfigProvider,
+            SamlReplayCache,
             NullLogger<SamlController>.Instance);
         SamlController.ControllerContext = new ControllerContext
         {
@@ -120,6 +123,7 @@ internal sealed class TestFixture
             Id = id,
             DisplayName = "Test SAML IdP",
             EntityId = "https://jellyfin.test",
+            IdpEntityId = "https://idp.example.com",
             SsoUrl = "https://idp.example.com/sso/saml",
             IdpCertificate = string.Empty, // signature verification skipped
             UsernameClaim = "NameID",

@@ -1,5 +1,7 @@
 using System;
 using System.Collections.Generic;
+using System.Globalization;
+using System.IO;
 using System.Linq;
 using System.Security.Cryptography;
 using System.Security.Cryptography.X509Certificates;
@@ -17,17 +19,52 @@ public sealed class ParsedSamlAssertion
     public string[] Roles { get; init; } = Array.Empty<string>();
     public IReadOnlyDictionary<string, string[]> Attributes { get; init; } =
         new Dictionary<string, string[]>();
+
+    /// <summary>Issuer of the accepted assertion (after validation against configured IdP EntityID).</summary>
+    public string Issuer { get; init; } = string.Empty;
+
+    /// <summary>Assertion ID — surfaced for replay-cache integration by the caller.</summary>
+    public string AssertionId { get; init; } = string.Empty;
+
+    /// <summary>NotOnOrAfter from the assertion Conditions (UTC). Always populated — missing rejects.</summary>
+    public DateTimeOffset NotOnOrAfter { get; init; }
+}
+
+/// <summary>
+/// Per-request parameters that the ACS endpoint must supply so the response can be validated
+/// against this specific in-flight authentication exchange.
+/// </summary>
+public sealed class SamlResponseValidationContext
+{
+    /// <summary>The ACS URL that the IdP POST'd to (used for Destination + Recipient checks).</summary>
+    public required string AcsUrl { get; init; }
+
+    /// <summary>
+    /// The AuthnRequest ID we issued when initiating SP-initiated SSO, retrieved from the RelayState
+    /// round-trip. <c>null</c> for IdP-initiated flows (only accepted when
+    /// <see cref="SamlProviderConfig.AllowIdpInitiated"/> is true).
+    /// </summary>
+    public string? ExpectedInResponseTo { get; init; }
 }
 
 /// <summary>
 /// Parses and validates SAML 2.0 Response messages (HTTP-POST binding).
-/// Security: XXE blocked, signature verified against IdP certificate, time conditions enforced,
-/// XSW mitigated by anchoring extraction to the signed element, algorithm allowlist enforced.
+/// Security: XXE blocked + size/entity caps, signature verified against IdP certificate, time
+/// conditions enforced, XSW mitigated by anchoring extraction to the signed element, algorithm
+/// allowlist enforced, Issuer/Audience/Destination/Recipient/InResponseTo/SubjectConfirmation
+/// validated against the request context.
 /// </summary>
 public static class SamlResponse
 {
     private const string AssertionNs = "urn:oasis:names:tc:SAML:2.0:assertion";
     private const string ProtocolNs = "urn:oasis:names:tc:SAML:2.0:protocol";
+    private const string BearerMethod = "urn:oasis:names:tc:SAML:2.0:cm:bearer";
+    private const int MaxClockSkewSeconds = 30;
+
+    // XML parser caps — keep aligned with SamlController's payload cap. A 256 KB base64-decoded
+    // payload is ~190 KB of XML; 1 MiB of characters covers comfortably-decompressed payloads
+    // without admitting megabyte-scale entity bombs.
+    private const int MaxXmlCharacters = 1_048_576;
 
     // Allowlists: explicitly reject SHA-1 and other weak algorithms.
     private static readonly HashSet<string> AllowedSignatureMethods = new(StringComparer.Ordinal)
@@ -61,12 +98,11 @@ public static class SamlResponse
     public static ParsedSamlAssertion Parse(
         string samlResponseBase64,
         SamlProviderConfig provider,
+        SamlResponseValidationContext context,
         ILogger logger)
     {
-        if (provider is null)
-        {
-            throw new ArgumentNullException(nameof(provider));
-        }
+        ArgumentNullException.ThrowIfNull(provider);
+        ArgumentNullException.ThrowIfNull(context);
 
         // Fail closed: an empty IdP cert means we cannot verify the assertion's authenticity.
         // Allowing this would let any attacker POST a forged unsigned assertion and authenticate
@@ -77,17 +113,22 @@ public static class SamlResponse
                 "SAML provider is misconfigured: IdpCertificate is required to verify response signatures.");
         }
 
-        string xml;
+        if (string.IsNullOrWhiteSpace(context.AcsUrl))
+        {
+            throw new InvalidOperationException("SAML validation context is missing the ACS URL.");
+        }
+
+        byte[] xmlBytes;
         try
         {
-            xml = Encoding.UTF8.GetString(Convert.FromBase64String(samlResponseBase64));
+            xmlBytes = Convert.FromBase64String(samlResponseBase64);
         }
         catch (Exception ex)
         {
             throw new InvalidOperationException("SAMLResponse is not valid base64", ex);
         }
 
-        var doc = LoadXmlSecure(xml);
+        var doc = LoadXmlSecure(xmlBytes);
 
         var nsMgr = new XmlNamespaceManager(doc.NameTable);
         nsMgr.AddNamespace("saml", AssertionNs);
@@ -148,18 +189,129 @@ public static class SamlResponse
                 $"SAML response: signed element <{signedRoot.LocalName}> is neither a Response nor an Assertion.");
         }
 
-        // Status: anchored to the document root (Response), not descendant-axis.
-        var statusCode = doc.SelectSingleNode(
-            "/samlp:Response/samlp:Status/samlp:StatusCode", nsMgr)?
+        // ── Response-level checks (anchored to document root, not descendant axis) ───────────
+        var responseEl = doc.SelectSingleNode("/samlp:Response", nsMgr) as XmlElement
+            ?? throw new InvalidOperationException("SAML response: missing Response element.");
+
+        var statusCode = responseEl.SelectSingleNode("./samlp:Status/samlp:StatusCode", nsMgr)?
             .Attributes?["Value"]?.Value;
         if (!string.Equals(statusCode, "urn:oasis:names:tc:SAML:2.0:status:Success", StringComparison.Ordinal))
         {
             throw new InvalidOperationException($"IdP returned non-success status: {statusCode}");
         }
 
-        ValidateConditions(signedAssertion, nsMgr);
+        // Destination — when present, must equal the ACS URL the IdP POST'd to. SAML core makes
+        // it mandatory for signed responses (which is the only kind we accept), but historically
+        // some IdPs omit it; reject the omission rather than silently accepting a response that
+        // could have been replayed against a different endpoint.
+        var destination = responseEl.GetAttribute("Destination");
+        if (string.IsNullOrEmpty(destination))
+        {
+            throw new InvalidOperationException("SAML response is missing required Destination attribute.");
+        }
+        if (!UrlEquals(destination, context.AcsUrl))
+        {
+            throw new InvalidOperationException(
+                $"SAML response Destination '{destination}' does not match ACS URL '{context.AcsUrl}'.");
+        }
 
-        // Anchored extraction from the signed assertion only.
+        // Response-level Issuer (when present) must match. The assertion-level Issuer below is the
+        // authoritative one; a mismatch on the outer wrapper is still a misconfiguration / attack.
+        var responseIssuer = responseEl.SelectSingleNode("./saml:Issuer", nsMgr)?.InnerText?.Trim();
+        if (!string.IsNullOrEmpty(responseIssuer) && !string.IsNullOrEmpty(provider.IdpEntityId) &&
+            !string.Equals(responseIssuer, provider.IdpEntityId, StringComparison.Ordinal))
+        {
+            throw new InvalidOperationException(
+                $"SAML response Issuer '{responseIssuer}' does not match configured IdpEntityId.");
+        }
+
+        // InResponseTo on the Response: validates against our stashed request ID. Missing means
+        // IdP-initiated, which requires explicit opt-in.
+        var responseInResponseTo = responseEl.GetAttribute("InResponseTo");
+        ValidateInResponseTo(responseInResponseTo, context.ExpectedInResponseTo, provider.AllowIdpInitiated,
+            "Response/@InResponseTo");
+
+        // ── Assertion-level checks ───────────────────────────────────────────────────────────
+        var assertionId = signedAssertion.GetAttribute("ID");
+        if (string.IsNullOrEmpty(assertionId))
+        {
+            throw new InvalidOperationException("SAML assertion is missing required ID attribute.");
+        }
+
+        var assertionIssuer = signedAssertion.SelectSingleNode("./saml:Issuer", nsMgr)?.InnerText?.Trim() ?? string.Empty;
+        if (string.IsNullOrEmpty(assertionIssuer))
+        {
+            throw new InvalidOperationException("SAML assertion is missing required Issuer element.");
+        }
+        if (!string.IsNullOrEmpty(provider.IdpEntityId) &&
+            !string.Equals(assertionIssuer, provider.IdpEntityId, StringComparison.Ordinal))
+        {
+            throw new InvalidOperationException(
+                $"SAML assertion Issuer '{assertionIssuer}' does not match configured IdpEntityId '{provider.IdpEntityId}'.");
+        }
+
+        // Subject + SubjectConfirmation (bearer): tie this assertion to *this* SP, *this* ACS,
+        // and *this* request, and apply the SubjectConfirmationData time bounds.
+        var subjectConfirmation = signedAssertion.SelectSingleNode(
+            "./saml:Subject/saml:SubjectConfirmation", nsMgr) as XmlElement
+            ?? throw new InvalidOperationException("SAML assertion is missing required SubjectConfirmation.");
+
+        var method = subjectConfirmation.GetAttribute("Method");
+        if (!string.Equals(method, BearerMethod, StringComparison.Ordinal))
+        {
+            throw new InvalidOperationException(
+                $"SAML SubjectConfirmation Method '{method}' is not the required bearer method.");
+        }
+
+        var subjectConfirmationData = subjectConfirmation.SelectSingleNode(
+            "./saml:SubjectConfirmationData", nsMgr) as XmlElement
+            ?? throw new InvalidOperationException(
+                "SAML assertion is missing required SubjectConfirmationData (bearer).");
+
+        var recipient = subjectConfirmationData.GetAttribute("Recipient");
+        if (string.IsNullOrEmpty(recipient))
+        {
+            throw new InvalidOperationException("SAML SubjectConfirmationData is missing required Recipient.");
+        }
+        if (!UrlEquals(recipient, context.AcsUrl))
+        {
+            throw new InvalidOperationException(
+                $"SAML SubjectConfirmationData Recipient '{recipient}' does not match ACS URL '{context.AcsUrl}'.");
+        }
+
+        var scdInResponseTo = subjectConfirmationData.GetAttribute("InResponseTo");
+        ValidateInResponseTo(scdInResponseTo, context.ExpectedInResponseTo, provider.AllowIdpInitiated,
+            "SubjectConfirmationData/@InResponseTo");
+
+        var scdNotOnOrAfterStr = subjectConfirmationData.GetAttribute("NotOnOrAfter");
+        if (string.IsNullOrEmpty(scdNotOnOrAfterStr))
+        {
+            throw new InvalidOperationException(
+                "SAML SubjectConfirmationData is missing required NotOnOrAfter.");
+        }
+        var scdNotOnOrAfter = ParseSamlInstant(scdNotOnOrAfterStr, "SubjectConfirmationData/@NotOnOrAfter");
+        if (DateTimeOffset.UtcNow >= scdNotOnOrAfter + TimeSpan.FromSeconds(MaxClockSkewSeconds))
+        {
+            throw new InvalidOperationException(
+                $"SAML SubjectConfirmationData has expired (NotOnOrAfter: {scdNotOnOrAfterStr}).");
+        }
+
+        // NotBefore on SubjectConfirmationData is optional; honor it when present.
+        var scdNotBeforeStr = subjectConfirmationData.GetAttribute("NotBefore");
+        if (!string.IsNullOrEmpty(scdNotBeforeStr))
+        {
+            var scdNotBefore = ParseSamlInstant(scdNotBeforeStr, "SubjectConfirmationData/@NotBefore");
+            if (DateTimeOffset.UtcNow < scdNotBefore - TimeSpan.FromSeconds(MaxClockSkewSeconds))
+            {
+                throw new InvalidOperationException(
+                    $"SAML SubjectConfirmationData is not yet valid (NotBefore: {scdNotBeforeStr}).");
+            }
+        }
+
+        // Conditions: NotBefore/NotOnOrAfter + AudienceRestriction. NotOnOrAfter is required.
+        var assertionNotOnOrAfter = ValidateConditions(signedAssertion, nsMgr, provider.EntityId);
+
+        // ── Extract claims (anchored to the signed assertion only) ──────────────────────────
         var nameId = signedAssertion.SelectSingleNode(
             "./saml:Subject/saml:NameID", nsMgr)?.InnerText?.Trim() ?? string.Empty;
 
@@ -196,21 +348,31 @@ public static class SamlResponse
         {
             NameId = nameId,
             Roles = roles,
-            Attributes = attributes
+            Attributes = attributes,
+            Issuer = assertionIssuer,
+            AssertionId = assertionId,
+            NotOnOrAfter = assertionNotOnOrAfter
         };
     }
 
-    private static XmlDocument LoadXmlSecure(string xml)
+    private static XmlDocument LoadXmlSecure(byte[] xmlBytes)
     {
+        // PreserveWhitespace is required so SignedXml.CheckSignature canonicalizes the same bytes
+        // the IdP signed. The locked-down XmlReader still applies: DtdProcessing.Prohibit kills
+        // XXE, MaxCharactersInDocument and MaxCharactersFromEntities cap the parse cost.
         var doc = new XmlDocument { PreserveWhitespace = true };
         var settings = new XmlReaderSettings
         {
             DtdProcessing = DtdProcessing.Prohibit,
-            XmlResolver = null
+            XmlResolver = null,
+            MaxCharactersInDocument = MaxXmlCharacters,
+            MaxCharactersFromEntities = 0,
+            CloseInput = true,
         };
         try
         {
-            using var reader = XmlReader.Create(new System.IO.StringReader(xml), settings);
+            using var stream = new MemoryStream(xmlBytes, writable: false);
+            using var reader = XmlReader.Create(stream, settings);
             doc.Load(reader);
         }
         catch (XmlException ex)
@@ -364,27 +526,146 @@ public static class SamlResponse
         return X509CertificateLoader.LoadCertificate(Convert.FromBase64String(cleaned));
     }
 
-    private static void ValidateConditions(XmlElement assertion, XmlNamespaceManager nsMgr)
+    /// <summary>
+    /// Validates time conditions + AudienceRestriction on the signed assertion. Returns the parsed
+    /// NotOnOrAfter as a UTC <see cref="DateTimeOffset"/> so the caller can feed the replay cache.
+    /// </summary>
+    private static DateTimeOffset ValidateConditions(
+        XmlElement assertion, XmlNamespaceManager nsMgr, string spEntityId)
     {
-        var conditions = assertion.SelectSingleNode("./saml:Conditions", nsMgr);
-        if (conditions == null) return;
+        var conditions = assertion.SelectSingleNode("./saml:Conditions", nsMgr) as XmlElement
+            ?? throw new InvalidOperationException("SAML assertion is missing required Conditions element.");
 
-        var now = DateTime.UtcNow;
-
-        var notBefore = conditions.Attributes?["NotBefore"]?.Value;
-        if (notBefore != null &&
-            DateTime.TryParse(notBefore, null, System.Globalization.DateTimeStyles.RoundtripKind, out var nb) &&
-            now < nb.AddSeconds(-30))
+        // NotOnOrAfter is required — without it the assertion never expires, which is unsafe.
+        var notOnOrAfterStr = conditions.GetAttribute("NotOnOrAfter");
+        if (string.IsNullOrEmpty(notOnOrAfterStr))
         {
-            throw new InvalidOperationException($"SAML assertion is not valid yet (NotBefore: {notBefore})");
+            throw new InvalidOperationException("SAML assertion Conditions is missing required NotOnOrAfter.");
+        }
+        var notOnOrAfter = ParseSamlInstant(notOnOrAfterStr, "Conditions/@NotOnOrAfter");
+
+        var now = DateTimeOffset.UtcNow;
+        if (now >= notOnOrAfter + TimeSpan.FromSeconds(MaxClockSkewSeconds))
+        {
+            throw new InvalidOperationException(
+                $"SAML assertion has expired (NotOnOrAfter: {notOnOrAfterStr}).");
         }
 
-        var notOnOrAfter = conditions.Attributes?["NotOnOrAfter"]?.Value;
-        if (notOnOrAfter != null &&
-            DateTime.TryParse(notOnOrAfter, null, System.Globalization.DateTimeStyles.RoundtripKind, out var noa) &&
-            now >= noa.AddSeconds(30))
+        var notBeforeStr = conditions.GetAttribute("NotBefore");
+        if (!string.IsNullOrEmpty(notBeforeStr))
         {
-            throw new InvalidOperationException($"SAML assertion has expired (NotOnOrAfter: {notOnOrAfter})");
+            var notBefore = ParseSamlInstant(notBeforeStr, "Conditions/@NotBefore");
+            if (now < notBefore - TimeSpan.FromSeconds(MaxClockSkewSeconds))
+            {
+                throw new InvalidOperationException(
+                    $"SAML assertion is not valid yet (NotBefore: {notBeforeStr}).");
+            }
         }
+
+        // AudienceRestriction: at least one Audience must match the configured SP EntityID.
+        // (Skipped when no SP EntityID is configured — initial-setup convenience; flagged in docs.)
+        if (!string.IsNullOrEmpty(spEntityId))
+        {
+            var audienceNodes = conditions.SelectNodes(
+                "./saml:AudienceRestriction/saml:Audience", nsMgr);
+            if (audienceNodes == null || audienceNodes.Count == 0)
+            {
+                throw new InvalidOperationException(
+                    "SAML assertion Conditions is missing required AudienceRestriction/Audience.");
+            }
+
+            var matched = false;
+            foreach (XmlNode aud in audienceNodes)
+            {
+                var value = aud.InnerText?.Trim();
+                if (string.Equals(value, spEntityId, StringComparison.Ordinal))
+                {
+                    matched = true;
+                    break;
+                }
+            }
+
+            if (!matched)
+            {
+                throw new InvalidOperationException(
+                    $"SAML assertion AudienceRestriction does not include configured SP EntityID '{spEntityId}'.");
+            }
+        }
+
+        return notOnOrAfter;
+    }
+
+    private static void ValidateInResponseTo(
+        string actual, string? expected, bool allowIdpInitiated, string fieldDescription)
+    {
+        if (string.IsNullOrEmpty(actual))
+        {
+            // No InResponseTo at all — this is an IdP-initiated assertion. Reject unless the
+            // operator has explicitly opted in via the provider config.
+            if (expected != null)
+            {
+                throw new InvalidOperationException(
+                    $"SAML response is missing {fieldDescription} but a SP-initiated request was in flight.");
+            }
+            if (!allowIdpInitiated)
+            {
+                throw new InvalidOperationException(
+                    $"SAML response has no {fieldDescription}: IdP-initiated SSO is disabled for this provider.");
+            }
+            return;
+        }
+
+        // InResponseTo is present: must match our stashed request ID.
+        if (expected == null)
+        {
+            throw new InvalidOperationException(
+                $"SAML response carries {fieldDescription}='{actual}' but no SP-initiated request is in flight.");
+        }
+        if (!string.Equals(actual, expected, StringComparison.Ordinal))
+        {
+            throw new InvalidOperationException(
+                $"SAML response {fieldDescription} '{actual}' does not match expected request ID '{expected}'.");
+        }
+    }
+
+    /// <summary>
+    /// Parse a SAML "dateTime" instant, treating any input — Z-suffixed, offset, or naive — as UTC.
+    /// SAML core requires UTC, but real-world IdPs occasionally emit naive timestamps; treating
+    /// those as UTC (rather than local) keeps validation deterministic across deployments.
+    /// </summary>
+    private static DateTimeOffset ParseSamlInstant(string value, string fieldName)
+    {
+        if (!DateTimeOffset.TryParse(
+                value,
+                CultureInfo.InvariantCulture,
+                DateTimeStyles.AssumeUniversal | DateTimeStyles.AdjustToUniversal,
+                out var parsed))
+        {
+            throw new InvalidOperationException(
+                $"SAML {fieldName} is not a valid dateTime: '{value}'.");
+        }
+        return parsed;
+    }
+
+    private static bool UrlEquals(string a, string b)
+    {
+        // SAML Recipient/Destination matching is "string equality" per spec but real-world
+        // deployments suffer from trailing-slash and case-of-host mismatches that break loginat
+        // without weakening security. We compare with Uri normalization (lowercase scheme/host,
+        // identical path/query) so https://host/Acs == https://HOST/Acs == https://host:443/Acs.
+        // Trailing slashes are NOT normalized away — they're meaningful in the spec, and a
+        // misconfigured IdP that includes one against an ACS that doesn't (or vice versa) is
+        // a real misconfiguration that should be surfaced loudly.
+        if (string.Equals(a, b, StringComparison.Ordinal)) return true;
+        if (!Uri.TryCreate(a, UriKind.Absolute, out var ua) ||
+            !Uri.TryCreate(b, UriKind.Absolute, out var ub))
+        {
+            return false;
+        }
+        return string.Equals(ua.Scheme, ub.Scheme, StringComparison.OrdinalIgnoreCase) &&
+               string.Equals(ua.Host, ub.Host, StringComparison.OrdinalIgnoreCase) &&
+               ua.Port == ub.Port &&
+               string.Equals(ua.AbsolutePath, ub.AbsolutePath, StringComparison.Ordinal) &&
+               string.Equals(ua.Query, ub.Query, StringComparison.Ordinal);
     }
 }
