@@ -25,18 +25,6 @@ public class OidcLogoutController : ControllerBase
 {
     private const string BackChannelLogoutEventType = "http://schemas.openid.net/event/backchannel-logout";
 
-    /// <summary>
-    /// Whitelisted JWS algorithms for logout_token verification. Excludes "none", HS* (would let
-    /// any party with the client_secret forge a logout for any user across the deployment), and
-    /// SHA-1-based variants. Mirrors what production-grade IdPs sign with.
-    /// </summary>
-    private static readonly string[] AllowedAlgorithms = new[]
-    {
-        "RS256", "RS384", "RS512",
-        "ES256", "ES384", "ES512",
-        "PS256", "PS384", "PS512"
-    };
-
     private static readonly TimeSpan IatSkew = TimeSpan.FromMinutes(5);
     private static readonly TimeSpan ExpSkew = TimeSpan.FromMinutes(5);
 
@@ -171,6 +159,11 @@ public class OidcLogoutController : ControllerBase
                 logout_token, provider.ClientSecret, discovery.JwksUri, _jwksCache,
                 provider.AllowedSigningAlgorithms).ConfigureAwait(false);
         }
+        catch (SecurityTokenException ex)
+        {
+            _logger.LogWarning(ex, "Back-channel logout: rejecting token (alg not allowed or related signing-key validation failure)");
+            return BadRequest("Token signing validation failed");
+        }
         catch (Exception ex)
         {
             _logger.LogError(ex, "Back-channel logout: failed to resolve signing keys");
@@ -189,7 +182,6 @@ public class OidcLogoutController : ControllerBase
             ValidateLifetime = false,
             ValidateIssuerSigningKey = true,
             RequireSignedTokens = true,
-            ValidAlgorithms = AllowedAlgorithms,
             LifetimeValidator = ValidateLogoutTokenLifetime,
             ClockSkew = TimeSpan.FromSeconds(30)
         };
