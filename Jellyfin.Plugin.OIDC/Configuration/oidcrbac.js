@@ -271,19 +271,21 @@ function runPreview(view) {
         url: ApiClient.getUrl('sso/OIDC/Config/PreviewPermissions?' + params.toString()),
         dataType: 'json'
     }).then(function (result) {
+        var grants = (result.MatchedGrantMappings || []).join(', ') || '(none)';
+        var denies = (result.MatchedDenyMappings || []).join(', ') || '(none)';
         var lines = [
-            'Admin: ' + result.isAdmin,
-            'Playback: ' + result.enableMediaPlayback,
-            'Remote: ' + result.enableRemoteAccess,
-            'Transcoding: ' + result.enableTranscoding,
-            'Live TV: ' + result.enableLiveTv + (result.enableLiveTvManagement ? ' (manage)' : ''),
-            'Download: ' + result.enableDownload,
-            'SyncPlay: ' + (result.enableSyncplayGroupCreation ? 'host' : result.enableSyncplay ? 'join' : 'none'),
-            'Libraries: ' + (result.enableAllLibraries ? 'ALL' : (result.libraries && result.libraries.length ? result.libraries.join(', ') : 'none')),
-            'Max Rating: ' + (result.maxParentalRating != null ? result.maxParentalRating : 'unrestricted'),
+            'Admin: ' + result.IsAdmin,
+            'Playback: ' + result.EnableMediaPlayback,
+            'Remote: ' + result.EnableRemoteAccess,
+            'Transcoding: ' + result.EnableTranscoding,
+            'Live TV: ' + result.EnableLiveTv + (result.EnableLiveTvManagement ? ' (manage)' : ''),
+            'Download: ' + result.EnableDownload,
+            'SyncPlay: ' + (result.EnableSyncplayGroupCreation ? 'host' : result.EnableSyncplay ? 'join' : 'none'),
+            'Libraries: ' + (result.EnableAllLibraries ? 'ALL' : (result.Libraries && result.Libraries.length ? result.Libraries.join(', ') : 'none')),
+            'Max Rating: ' + (result.MaxParentalRating != null ? result.MaxParentalRating : 'unrestricted'),
             '',
-            'Matched grants: ' + (result.matchedGrantMappings || []).join(', ') || '(none)',
-            'Matched denies: ' + (result.matchedDenyMappings || []).join(', ') || '(none)',
+            'Matched grants: ' + grants,
+            'Matched denies: ' + denies,
         ];
         resultEl.textContent = lines.join('\n');
     }).catch(function (err) {
