@@ -195,7 +195,14 @@ public class OidcUserStore
                 Links = new Dictionary<string, Guid>(_links)
             };
             var json = JsonSerializer.Serialize(data, _jsonOptions);
-            await File.WriteAllTextAsync(StorePath, json).ConfigureAwait(false);
+            var path = StorePath;
+            var dir = Path.GetDirectoryName(path);
+            if (!string.IsNullOrEmpty(dir))
+            {
+                Directory.CreateDirectory(dir);
+            }
+
+            await File.WriteAllTextAsync(path, json).ConfigureAwait(false);
         }
         finally
         {

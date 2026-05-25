@@ -2,19 +2,22 @@
      data-controller="__plugin/oidcrbacjs">
     <div data-role="content">
         <div class="content-primary">
-            <h2 style="margin-bottom:1em;">OIDC RBAC Configuration</h2>
+            <div class="oidc-page-header">
+                <h2>OIDC RBAC Configuration</h2>
+                <p class="oidc-page-subtitle">OpenID Connect and SAML single sign-on with role-based access control.</p>
+            </div>
 
-            <div style="display:flex;gap:0;margin-bottom:1.5em;border-bottom:2px solid #444;">
-                <button type="button" class="oidc-tab" data-tab="providers" style="padding:0.6em 1.5em;cursor:pointer;border:none;background:none;color:#00a4dc;font-size:1em;border-bottom:2px solid #00a4dc;margin-bottom:-2px;">OIDC Providers</button>
-                <button type="button" class="oidc-tab" data-tab="roles" style="padding:0.6em 1.5em;cursor:pointer;border:none;background:none;color:#aaa;font-size:1em;border-bottom:2px solid transparent;margin-bottom:-2px;">Role Mappings</button>
-                <button type="button" class="oidc-tab" data-tab="saml" style="padding:0.6em 1.5em;cursor:pointer;border:none;background:none;color:#aaa;font-size:1em;border-bottom:2px solid transparent;margin-bottom:-2px;">SAML</button>
-                <button type="button" class="oidc-tab" data-tab="preview" style="padding:0.6em 1.5em;cursor:pointer;border:none;background:none;color:#aaa;font-size:1em;border-bottom:2px solid transparent;margin-bottom:-2px;">Preview</button>
-                <button type="button" class="oidc-tab" data-tab="general" style="padding:0.6em 1.5em;cursor:pointer;border:none;background:none;color:#aaa;font-size:1em;border-bottom:2px solid transparent;margin-bottom:-2px;">General</button>
+            <div class="oidc-tabs" role="tablist">
+                <button type="button" class="oidc-tab oidc-tab-active" data-tab="providers">OIDC Providers</button>
+                <button type="button" class="oidc-tab" data-tab="roles">Role Mappings</button>
+                <button type="button" class="oidc-tab" data-tab="saml">SAML</button>
+                <button type="button" class="oidc-tab" data-tab="preview">Preview</button>
+                <button type="button" class="oidc-tab" data-tab="general">General</button>
             </div>
 
             <!-- OIDC Providers tab -->
             <div id="tab-providers" class="oidc-tab-content">
-                <div style="margin-bottom:1em;">
+                <div class="oidc-toolbar">
                     <button type="button" id="btnAddProvider" is="emby-button" class="raised">
                         <span>+ Add OIDC Provider</span>
                     </button>
@@ -24,10 +27,10 @@
 
             <!-- Role Mappings tab -->
             <div id="tab-roles" class="oidc-tab-content" style="display:none;">
-                <p style="color:#aaa;font-size:0.9em;margin-top:0;">
+                <p class="oidc-tab-intro">
                     Grant mappings apply permissions. Deny mappings (toggle below) strip permissions after all grants — deny wins.
                 </p>
-                <div style="margin-bottom:1em;">
+                <div class="oidc-toolbar">
                     <button type="button" id="btnAddRoleMapping" is="emby-button" class="raised">
                         <span>+ Add Role Mapping</span>
                     </button>
@@ -37,10 +40,10 @@
 
             <!-- SAML tab -->
             <div id="tab-saml" class="oidc-tab-content" style="display:none;">
-                <p style="color:#aaa;font-size:0.9em;margin-top:0;">
+                <p class="oidc-tab-intro">
                     SAML 2.0 SP-initiated SSO (HTTP-Redirect + HTTP-POST). Roles map to the same Role Mappings as OIDC.
                 </p>
-                <div style="margin-bottom:1em;">
+                <div class="oidc-toolbar">
                     <button type="button" id="btnAddSamlProvider" is="emby-button" class="raised">
                         <span>+ Add SAML Provider</span>
                     </button>
@@ -50,54 +53,56 @@
 
             <!-- Preview tab -->
             <div id="tab-preview" class="oidc-tab-content" style="display:none;">
-                <p style="color:#aaa;font-size:0.9em;margin-top:0;">
+                <p class="oidc-tab-intro">
                     Enter roles and entitlements to preview what permissions would be applied, without affecting any real user.
                 </p>
-                <div style="border:1px solid #444;border-radius:8px;padding:1em;background:rgba(255,255,255,0.03);max-width:600px;">
-                    <div style="display:grid;grid-template-columns:1fr 1fr;gap:0.8em;margin-bottom:0.8em;">
-                        <div>
-                            <label class="fieldDescription" for="previewProvider">Provider ID</label>
+                <div class="oidc-card oidc-card-static">
+                    <div class="oidc-grid">
+                        <div class="oidc-field">
+                            <label class="inputLabel inputLabelUnfocused" for="previewProvider">Provider ID</label>
                             <input id="previewProvider" type="text" is="emby-input" placeholder="e.g. keycloak" />
                         </div>
-                        <div style="grid-column:1/-1;">
-                            <label class="fieldDescription" for="previewRoles">Roles (comma-separated)</label>
+                        <div class="oidc-field full">
+                            <label class="inputLabel inputLabelUnfocused" for="previewRoles">Roles (comma-separated)</label>
                             <input id="previewRoles" type="text" is="emby-input" placeholder="admin,viewer" />
                         </div>
-                        <div style="grid-column:1/-1;">
-                            <label class="fieldDescription" for="previewEntitlements">Entitlements (comma-separated)</label>
+                        <div class="oidc-field full">
+                            <label class="inputLabel inputLabelUnfocused" for="previewEntitlements">Entitlements (comma-separated)</label>
                             <input id="previewEntitlements" type="text" is="emby-input" placeholder="jellyfin:admin,jellyfin:library:Movies" />
                         </div>
                     </div>
-                    <button type="button" id="btnPreview" is="emby-button" class="raised">
-                        <span>Compute Preview</span>
-                    </button>
-                    <pre id="previewResult" style="margin-top:1em;padding:0.8em;background:#1a1a1a;border-radius:4px;font-size:0.85em;white-space:pre-wrap;min-height:4em;"></pre>
+                    <div class="oidc-card-actions">
+                        <button type="button" id="btnPreview" is="emby-button" class="raised">
+                            <span>Compute Preview</span>
+                        </button>
+                    </div>
+                    <pre id="previewResult" class="oidc-preview-output"></pre>
                 </div>
             </div>
 
             <!-- General tab -->
             <div id="tab-general" class="oidc-tab-content" style="display:none;">
-                <div style="border:1px solid #444;border-radius:8px;padding:1em;background:rgba(255,255,255,0.03);">
-                    <div style="display:grid;grid-template-columns:1fr 1fr;gap:0.8em;">
-                        <div>
-                            <label class="fieldDescription" for="defaultProvider">Default Provider ID</label>
+                <div class="oidc-card oidc-card-static">
+                    <div class="oidc-grid">
+                        <div class="oidc-field">
+                            <label class="inputLabel inputLabelUnfocused" for="defaultProvider">Default Provider ID</label>
                             <input id="defaultProvider" type="text" is="emby-input" placeholder="e.g. keycloak" />
                         </div>
-                        <div>
-                            <label class="fieldDescription" for="defaultRoleName">Default Role (fallback)</label>
+                        <div class="oidc-field">
+                            <label class="inputLabel inputLabelUnfocused" for="defaultRoleName">Default Role (fallback)</label>
                             <input id="defaultRoleName" type="text" is="emby-input" placeholder="e.g. viewer" />
                         </div>
-                        <div style="grid-column:1/-1;">
-                            <label>
-                                <input type="checkbox" id="autoCreateUsers" is="emby-checkbox" />
-                                <span>Auto-create users on first OIDC/SAML login</span>
-                            </label>
-                        </div>
+                    </div>
+                    <div class="oidc-checkbox-row" style="margin-top:1em;">
+                        <label class="emby-checkbox-label">
+                            <input type="checkbox" id="autoCreateUsers" is="emby-checkbox" />
+                            <span>Auto-create users on first OIDC/SAML login</span>
+                        </label>
                     </div>
                 </div>
             </div>
 
-            <div style="margin-top:2em;">
+            <div class="oidc-save-bar">
                 <button type="button" id="btnSave" is="emby-button" class="raised button-submit block">
                     <span>Save</span>
                 </button>
@@ -106,23 +111,201 @@
     </div>
 
     <style>
-        .oidc-card { border:1px solid #444; border-radius:8px; padding:1em; margin-bottom:1em; background:rgba(255,255,255,0.03); }
-        .oidc-card-deny { border-color:#c62828; background:rgba(198,40,40,0.05); }
-        .oidc-card h4 { margin-top:0; }
-        .oidc-grid { display:grid; grid-template-columns:1fr 1fr; gap:0.8em; }
-        .oidc-field { display:flex; flex-direction:column; gap:0.3em; }
-        .oidc-field label { font-weight:600; font-size:0.9em; }
-        .oidc-field input, .oidc-field select { padding:0.4em; }
-        .oidc-field.full { grid-column:1/-1; }
-        .oidc-checkbox-row { display:flex; flex-wrap:wrap; gap:1em; margin:0.5em 0; }
-        .oidc-checkbox-row label { display:flex; align-items:center; gap:0.3em; font-weight:normal; }
-        .oidc-library-list { display:flex; flex-wrap:wrap; gap:0.5em; margin-top:0.3em; }
-        .oidc-library-chip { background:#00a4dc33; border:1px solid #00a4dc; border-radius:4px; padding:0.2em 0.6em; display:flex; align-items:center; gap:0.3em; }
-        .oidc-library-chip .remove { cursor:pointer; font-weight:bold; color:#c62828; }
-        .oidc-btn-remove { background:#c62828;color:#fff;padding:0.4em 1em;border:none;border-radius:4px;cursor:pointer; }
-        .oidc-btn-secondary { background:#555;color:#fff;padding:0.4em 1em;border:none;border-radius:4px;cursor:pointer; }
-        .oidc-transform-row { display:flex;align-items:center;margin-bottom:0.4em; }
-        .oidc-transform-row input { flex:1;padding:0.3em; }
-        .oidc-test-result { display:inline-block; }
+        /* Page header */
+        #OidcConfigPage .oidc-page-header { margin-bottom: 1.5em; }
+        #OidcConfigPage .oidc-page-header h2 { margin: 0 0 0.3em; }
+        #OidcConfigPage .oidc-page-subtitle { color: #aaa; margin: 0; font-size: 0.95em; }
+
+        /* Tabs */
+        #OidcConfigPage .oidc-tabs {
+            display: flex; flex-wrap: wrap; gap: 0;
+            margin-bottom: 1.5em;
+            border-bottom: 1px solid rgba(255,255,255,0.12);
+        }
+        #OidcConfigPage .oidc-tab {
+            padding: 0.7em 1.4em; cursor: pointer; border: none; background: none;
+            color: #aaa; font-size: 0.95em; font-weight: 500;
+            border-bottom: 2px solid transparent; margin-bottom: -1px;
+            transition: color 0.15s ease, border-color 0.15s ease;
+        }
+        #OidcConfigPage .oidc-tab:hover { color: #fff; }
+        #OidcConfigPage .oidc-tab-active { color: #00a4dc; border-bottom-color: #00a4dc; }
+
+        #OidcConfigPage .oidc-tab-intro { color: #aaa; font-size: 0.9em; margin: 0 0 1em; max-width: 50em; }
+        #OidcConfigPage .oidc-toolbar { margin-bottom: 1em; }
+
+        /* Cards */
+        #OidcConfigPage .oidc-card {
+            border: 1px solid rgba(255,255,255,0.1);
+            border-radius: 10px;
+            padding: 1.25em 1.5em;
+            margin-bottom: 1.25em;
+            background: rgba(255,255,255,0.025);
+            box-shadow: 0 1px 3px rgba(0,0,0,0.2);
+        }
+        #OidcConfigPage .oidc-card-static { background: rgba(255,255,255,0.03); }
+        #OidcConfigPage .oidc-card-deny {
+            border-left: 4px solid #e53935;
+            background: rgba(229,57,53,0.04);
+        }
+
+        /* Card header */
+        #OidcConfigPage .oidc-card-header {
+            display: flex; align-items: center; justify-content: space-between;
+            gap: 1em; flex-wrap: wrap;
+            padding-bottom: 0.8em; margin-bottom: 1em;
+            border-bottom: 1px solid rgba(255,255,255,0.08);
+        }
+        #OidcConfigPage .oidc-card-title { display: flex; align-items: center; gap: 0.6em; flex-wrap: wrap; min-width: 0; }
+        #OidcConfigPage .oidc-card-name { font-size: 1.15em; font-weight: 600; color: #fff; }
+        #OidcConfigPage .oidc-chip {
+            display: inline-block; padding: 0.15em 0.6em;
+            background: rgba(0,164,220,0.15); color: #00a4dc;
+            border: 1px solid rgba(0,164,220,0.4);
+            border-radius: 12px; font-size: 0.78em; font-family: monospace;
+        }
+        #OidcConfigPage .oidc-badge-deny,
+        #OidcConfigPage .oidc-badge-grant {
+            display: inline-block; padding: 0.15em 0.55em;
+            border-radius: 3px; font-size: 0.72em; font-weight: 700; letter-spacing: 0.05em;
+        }
+        #OidcConfigPage .oidc-badge-deny { background: #c62828; color: #fff; }
+        #OidcConfigPage .oidc-badge-grant { background: rgba(76,175,80,0.2); color: #4caf50; border: 1px solid rgba(76,175,80,0.4); }
+
+        /* Status pill */
+        #OidcConfigPage .oidc-status {
+            display: inline-flex; align-items: center; gap: 0.4em;
+            font-size: 0.82em; color: #aaa;
+            padding: 0.25em 0.7em; border-radius: 12px;
+            background: rgba(255,255,255,0.04);
+        }
+        #OidcConfigPage .oidc-status-dot {
+            width: 8px; height: 8px; border-radius: 50%;
+            background: #888;
+        }
+        #OidcConfigPage .oidc-status-on .oidc-status-dot { background: #4caf50; box-shadow: 0 0 6px rgba(76,175,80,0.6); }
+        #OidcConfigPage .oidc-status-on { color: #4caf50; }
+        #OidcConfigPage .oidc-status-off .oidc-status-dot { background: #888; }
+
+        /* Sections inside cards */
+        #OidcConfigPage .oidc-section { margin-bottom: 1.1em; }
+        #OidcConfigPage .oidc-section:last-of-type { margin-bottom: 0.5em; }
+        #OidcConfigPage .oidc-section-title {
+            font-size: 0.75em; font-weight: 700; letter-spacing: 0.08em;
+            text-transform: uppercase; color: #888;
+            margin-bottom: 0.6em;
+        }
+
+        /* Grid */
+        #OidcConfigPage .oidc-grid {
+            display: grid;
+            grid-template-columns: repeat(2, minmax(0, 1fr));
+            gap: 0.8em 1.2em;
+        }
+        @media (max-width: 720px) {
+            #OidcConfigPage .oidc-grid { grid-template-columns: 1fr; }
+        }
+        #OidcConfigPage .oidc-field { display: flex; flex-direction: column; min-width: 0; }
+        #OidcConfigPage .oidc-field.full { grid-column: 1 / -1; }
+        #OidcConfigPage .oidc-field label { font-size: 0.85em; margin-bottom: 0.3em; }
+
+        /* Color input — make it less tiny */
+        #OidcConfigPage .oidc-field-color input[type="color"] {
+            width: 4em; height: 2.2em; padding: 2px;
+            border: 1px solid rgba(255,255,255,0.15); border-radius: 4px;
+            background: rgba(0,0,0,0.2); cursor: pointer;
+        }
+
+        /* Checkbox rows */
+        #OidcConfigPage .oidc-checkbox-row {
+            display: grid;
+            grid-template-columns: repeat(auto-fill, minmax(180px, 1fr));
+            gap: 0.4em 1em;
+        }
+        /* Let native emby-checkbox styling drive layout — don't override padding/display.
+           The web component injects an absolute-positioned .checkboxOutline that needs
+           the label's native padding-left to avoid overlapping label text. */
+        #OidcConfigPage .emby-checkbox-label { font-weight: normal; }
+        #OidcConfigPage .oidc-deny-toggle {
+            margin-top: 0.8em; padding: 0.6em 0.8em;
+            background: rgba(229,57,53,0.07);
+            border: 1px solid rgba(229,57,53,0.3);
+            border-radius: 6px; font-size: 0.9em;
+        }
+        #OidcConfigPage .oidc-deny-toggle .emby-checkbox-label { height: auto; min-height: 2.35em; }
+
+        /* Library chips */
+        #OidcConfigPage .oidc-lib-controls { display: flex; gap: 0.5em; align-items: center; flex-wrap: wrap; max-width: 28em; }
+        #OidcConfigPage .oidc-lib-controls select { flex: 1; min-width: 12em; }
+        #OidcConfigPage .oidc-library-list { display: flex; flex-wrap: wrap; gap: 0.4em; margin-top: 0.6em; }
+        #OidcConfigPage .oidc-library-chip {
+            background: rgba(0,164,220,0.15); border: 1px solid rgba(0,164,220,0.4);
+            color: #fff; border-radius: 14px;
+            padding: 0.25em 0.7em; display: inline-flex; align-items: center; gap: 0.4em;
+            font-size: 0.85em;
+        }
+        #OidcConfigPage .oidc-library-chip .remove {
+            cursor: pointer; font-weight: bold; color: #ff7961;
+            line-height: 1; font-size: 1.1em;
+        }
+        #OidcConfigPage .oidc-library-chip .remove:hover { color: #ff5252; }
+
+        /* Transform rows */
+        #OidcConfigPage .oidc-details { margin: 0.5em 0 1em; }
+        #OidcConfigPage .oidc-details summary {
+            cursor: pointer; color: #aaa; font-size: 0.9em;
+            padding: 0.3em 0; user-select: none;
+        }
+        #OidcConfigPage .oidc-details summary:hover { color: #fff; }
+        #OidcConfigPage .oidc-count { color: #888; font-weight: normal; }
+        #OidcConfigPage .oidc-transform-list { margin: 0.6em 0; display: flex; flex-direction: column; gap: 0.4em; }
+        #OidcConfigPage .oidc-transform-row { display: flex; align-items: center; gap: 0.5em; }
+        #OidcConfigPage .oidc-transform-row input { flex: 1; min-width: 0; }
+        #OidcConfigPage .oidc-xform-arrow { color: #888; }
+        #OidcConfigPage .oidc-xform-remove {
+            background: transparent; color: #ff7961; border: 1px solid rgba(255,121,97,0.4);
+            border-radius: 4px; width: 1.8em; height: 1.8em;
+            cursor: pointer; line-height: 1; font-size: 1.1em;
+            display: inline-flex; align-items: center; justify-content: center;
+        }
+        #OidcConfigPage .oidc-xform-remove:hover { background: rgba(255,121,97,0.15); }
+        #OidcConfigPage .oidc-btn-add { font-size: 0.85em; }
+
+        /* Card action bar */
+        #OidcConfigPage .oidc-card-actions {
+            margin-top: 1.2em; padding-top: 0.8em;
+            border-top: 1px solid rgba(255,255,255,0.06);
+            display: flex; align-items: center; gap: 0.6em; flex-wrap: wrap;
+        }
+        #OidcConfigPage .oidc-btn-danger { background: #c62828 !important; }
+        #OidcConfigPage .oidc-btn-danger:hover { background: #b71c1c !important; }
+        #OidcConfigPage .oidc-test-result { font-size: 0.9em; }
+
+        /* Hints */
+        #OidcConfigPage .oidc-hint {
+            color: #888; font-size: 0.82em; margin: 0.4em 0 0;
+        }
+
+        /* SAML certificate textarea */
+        #OidcConfigPage .oidc-cert {
+            width: 100%; box-sizing: border-box;
+            font-family: monospace; font-size: 0.85em;
+            background: rgba(0,0,0,0.25); color: #ddd;
+            border: 1px solid rgba(255,255,255,0.1); border-radius: 6px;
+            padding: 0.6em; resize: vertical;
+        }
+
+        /* Preview output */
+        #OidcConfigPage .oidc-preview-output {
+            margin-top: 1em; padding: 1em;
+            background: rgba(0,0,0,0.3); color: #ddd;
+            border: 1px solid rgba(255,255,255,0.08);
+            border-radius: 6px; font-size: 0.85em;
+            white-space: pre-wrap; min-height: 5em;
+            font-family: monospace;
+        }
+
+        /* Save bar */
+        #OidcConfigPage .oidc-save-bar { margin-top: 2em; }
     </style>
 </div>

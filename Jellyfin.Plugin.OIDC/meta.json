@@ -7,6 +7,13 @@
   "category": "Authentication",
   "versions": [
     {
+      "version": "1.1.1.0",
+      "changelog": "Admin UI refresh with native Jellyfin form controls; fix Explicit Deny checkbox text clipping; fix DirectoryNotFoundException on first OIDC login.",
+      "targetAbi": "10.11.0.0",
+      "sourceUrl": "",
+      "timestamp": "2026-05-24T22:30:00Z"
+    },
+    {
       "version": "1.0.1.0",
       "changelog": "Fix Authentik discovery (relax endpoint validation); add Test Connection button on provider cards",
       "targetAbi": "10.11.0.0",
