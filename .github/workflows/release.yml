@@ -83,6 +83,24 @@ jobs:
           VERSION="${{ steps.version.outputs.version }}.0"
           DOWNLOAD_URL="https://github.com/${{ github.repository }}/releases/download/${GITHUB_REF_NAME}/oidc-rbac.zip"
 
+          # manifest.json lives on its own orphan `manifest` branch so releases
+          # don't churn main. Fetch the current manifest from that branch; if the
+          # branch doesn't exist yet, seed an empty manifest skeleton.
+          if git fetch origin manifest 2>/dev/null && git show origin/manifest:manifest.json > manifest.json 2>/dev/null; then
+            echo "Loaded manifest.json from origin/manifest"
+          else
+            echo "No origin/manifest branch yet — seeding empty manifest"
+            jq -n '[{
+              guid: "d4e5f6a7-b8c9-0d1e-2f3a-4b5c6d7e8f90",
+              name: "OIDC RBAC",
+              description: "Advanced OIDC authentication with role-based library access control",
+              overview: "OpenID Connect SSO with role-to-library mapping, multi-provider support, and admin UI.",
+              owner: "LeaderbotX400",
+              category: "Authentication",
+              versions: []
+            }]' > manifest.json
+          fi
+
           NEW_ENTRY=$(jq -n \
             --arg v "$VERSION" \
             --arg c "Release ${GITHUB_REF_NAME}" \
@@ -128,17 +146,28 @@ jobs:
           done
           exit $fail
 
-      - name: Commit updated manifest
-        # This job is the sole writer of manifest.json to main. The release workflow
-        # is triggered by tag pushes only, and Jellyfin consumers fetch the manifest
-        # directly from the main branch. This commit is intentional and expected.
+      - name: Commit updated manifest to manifest branch
+        # manifest.json lives on its own orphan `manifest` branch so the release
+        # workflow doesn't churn main. The branch contains only manifest.json
+        # (no source, no history from main). Jellyfin consumers point at the
+        # raw URL on the `manifest` branch.
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
           cp manifest.json /tmp/manifest.json
-          git fetch origin main
-          # -f discards the dirty manifest.json we wrote into the tag-checkout
-          git checkout -f main
+
+          if git ls-remote --exit-code --heads origin manifest >/dev/null 2>&1; then
+            git fetch origin manifest
+            # -f discards anything dirty from the tag checkout
+            git checkout -f -B manifest origin/manifest
+          else
+            echo "Creating orphan manifest branch"
+            git checkout --orphan manifest
+            git rm -rf --cached . >/dev/null 2>&1 || true
+            # Wipe the working tree so the orphan branch contains only manifest.json
+            find . -mindepth 1 -maxdepth 1 -not -name '.git' -exec rm -rf {} +
+          fi
+
           cp /tmp/manifest.json manifest.json
           git add manifest.json
           if git diff --cached --quiet; then
@@ -146,16 +175,15 @@ jobs:
             exit 0
           fi
           git commit -m "Update manifest.json for ${GITHUB_REF_NAME}"
-          # Retry to survive concurrent pushes to main during the build.
+          # Retry to survive concurrent pushes during the build.
           # No --force: this job is the only manifest writer. If a concurrent push
           # exists, rebase + retry cleanly; do NOT swallow rebase failures.
           for i in 1 2 3; do
-            if git push origin main; then
+            if git push origin manifest; then
               exit 0
             fi
             echo "Push failed, rebasing and retrying ($i/3)..."
-            # No '|| true': if rebase fails, we want the job to fail so a human investigates.
-            git pull --rebase origin main
+            git pull --rebase origin manifest
             sleep $((i * 2))
           done
           echo "::error::Failed to push manifest update after 3 attempts"

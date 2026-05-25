@@ -21,7 +21,7 @@ Authenticate users via any OIDC-compatible identity provider (Authentik, Keycloa
 ### Quick install — add this repository to Jellyfin
 
 ```
-https://raw.githubusercontent.com/LeaderbotX400/jellyfin-plugin-oidc/main/manifest.json
+https://raw.githubusercontent.com/LeaderbotX400/jellyfin-plugin-oidc/manifest/manifest.json
 ```
 
 ### From the Jellyfin Plugin Catalog
