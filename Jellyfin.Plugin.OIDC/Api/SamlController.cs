@@ -13,10 +13,22 @@ namespace Jellyfin.Plugin.OIDC.Api;
 [Route("sso/SAML")]
 public class SamlController : ControllerBase
 {
+    /// <summary>
+    /// Cap on the base64 SAMLResponse form field. 256 KB easily accommodates legitimate IdP
+    /// responses (typically &lt;20 KB) and well-padded enterprise responses, while refusing
+    /// the multi-MB blobs an attacker would use to force expensive XML parsing or signature
+    /// verification work.
+    /// </summary>
+    private const int MaxSamlResponseBytes = 256 * 1024;
+
+    /// <summary>Cap on RelayState — only a few KB are ever legitimate.</summary>
+    private const int MaxRelayStateBytes = 8 * 1024;
+
     private readonly UserSyncService _userSyncService;
     private readonly StateManager _stateManager;
     private readonly RbacService _rbacService;
     private readonly IPluginConfigProvider _configProvider;
+    private readonly SamlAssertionReplayCache _replayCache;
     private readonly ILogger<SamlController> _logger;
 
     public SamlController(
@@ -24,12 +36,14 @@ public class SamlController : ControllerBase
         StateManager stateManager,
         RbacService rbacService,
         IPluginConfigProvider configProvider,
+        SamlAssertionReplayCache replayCache,
         ILogger<SamlController> logger)
     {
         _userSyncService = userSyncService;
         _stateManager = stateManager;
         _rbacService = rbacService;
         _configProvider = configProvider;
+        _replayCache = replayCache;
         _logger = logger;
     }
 
@@ -46,7 +60,9 @@ public class SamlController : ControllerBase
         var requestId = "_" + Guid.NewGuid().ToString("N");
         var acsUrl = BuildAcsUrl(providerId);
 
-        // Store requestId in state so ACS can validate relay state (CSRF protection)
+        // Store requestId in state so ACS can validate InResponseTo + relay state (CSRF protection).
+        // The relayState key returned to the IdP is opaque; on POST-back we look up the stashed
+        // request ID and compare it against the response's InResponseTo to defeat replay/CSRF.
         var stateKey = _stateManager.StoreState(new OidcState
         {
             ProviderId = "saml:" + providerId,
@@ -78,7 +94,31 @@ public class SamlController : ControllerBase
             return BadRequest("Missing SAMLResponse");
         }
 
-        // Validate relay state (anti-CSRF)
+        // Size caps — cheap rejection before we burn cycles on base64 decode + XML parse +
+        // signature verification. The IdP-side limit is the raw base64 length; the XML parser
+        // applies its own MaxCharactersInDocument cap on the decoded payload.
+        if (samlResponse.Length > MaxSamlResponseBytes)
+        {
+            _logger.LogWarning(
+                "SAML: rejected oversized SAMLResponse ({Length} > {Cap} bytes, provider={Provider})",
+                samlResponse.Length, MaxSamlResponseBytes, providerId);
+            return BadRequest("SAMLResponse exceeds maximum allowed size.");
+        }
+
+        if (relayState != null && relayState.Length > MaxRelayStateBytes)
+        {
+            _logger.LogWarning(
+                "SAML: rejected oversized RelayState ({Length} > {Cap} bytes, provider={Provider})",
+                relayState.Length, MaxRelayStateBytes, providerId);
+            return BadRequest("RelayState exceeds maximum allowed size.");
+        }
+
+        // RelayState is the only CSRF binding to a real SP-initiated request. Treat absence as a
+        // policy decision: when AllowIdpInitiated=false, no RelayState means no in-flight request,
+        // which means we must reject. When AllowIdpInitiated=true, missing RelayState is fine —
+        // the ExpectedInResponseTo stays null and the response's InResponseTo (if any) must also
+        // be absent.
+        string? expectedInResponseTo = null;
         if (!string.IsNullOrEmpty(relayState))
         {
             var samlState = _stateManager.ConsumeState(relayState);
@@ -86,12 +126,26 @@ public class SamlController : ControllerBase
             {
                 return BadRequest("Invalid or expired relay state. Please try again.");
             }
+            expectedInResponseTo = samlState.Nonce;
         }
+        else if (!provider.AllowIdpInitiated)
+        {
+            _logger.LogWarning(
+                "SAML: rejecting response without RelayState (IdP-initiated SSO disabled for provider={Provider})",
+                providerId);
+            return BadRequest("Missing RelayState; IdP-initiated SSO is disabled for this provider.");
+        }
+
+        var context = new SamlResponseValidationContext
+        {
+            AcsUrl = BuildAcsUrl(providerId),
+            ExpectedInResponseTo = expectedInResponseTo
+        };
 
         Saml.ParsedSamlAssertion assertion;
         try
         {
-            assertion = SamlResponse.Parse(samlResponse, provider, _logger);
+            assertion = SamlResponse.Parse(samlResponse, provider, context, _logger);
         }
         catch (Exception ex)
         {
@@ -103,6 +157,20 @@ public class SamlController : ControllerBase
                 ex.Message,
                 Microsoft.Extensions.Logging.LogLevel.Warning).ConfigureAwait(false);
             return BadRequest("SAML assertion validation failed");
+        }
+
+        // Replay protection — refuse to consume the same AssertionID twice within its validity
+        // window. Without this, an attacker who captures a valid POST can re-submit it until
+        // NotOnOrAfter elapses.
+        if (!_replayCache.TryRegister(assertion.Issuer, assertion.AssertionId, assertion.NotOnOrAfter))
+        {
+            await _rbacService.LogActivityAsync(
+                "SAML login failed: replayed assertion",
+                "SamlLoginFailure",
+                Guid.Empty,
+                $"AssertionID={assertion.AssertionId}",
+                Microsoft.Extensions.Logging.LogLevel.Warning).ConfigureAwait(false);
+            return BadRequest("SAML assertion has already been consumed (replay).");
         }
 
         // Resolve username: named attribute takes precedence over NameID

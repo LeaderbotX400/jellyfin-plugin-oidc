@@ -236,6 +236,7 @@ function renderSamlProviders(view) {
                 fld('Provider ID', 'text', 'saml_id_' + idx, p.Id, 'Unique identifier') +
                 fld('Display Name', 'text', 'saml_name_' + idx, p.DisplayName, 'Shown on login button') +
                 fld('Entity ID (SP)', 'text', 'saml_entity_' + idx, p.EntityId, 'https://jellyfin.example.com', true) +
+                fld('IdP Entity ID', 'text', 'saml_idpentity_' + idx, p.IdpEntityId, 'Expected IdP issuer (e.g. https://idp.example.com)', true) +
                 fld('IdP SSO URL', 'text', 'saml_sso_' + idx, p.SsoUrl, 'https://idp.example.com/sso/saml', true) +
                 '</div>') +
             section('Claims', '<div class="oidc-grid">' +
@@ -250,7 +251,9 @@ function renderSamlProviders(view) {
                 '<p class="oidc-hint">PEM or base64 DER.</p>') +
             section('Options', '<div class="oidc-checkbox-row">' +
                 chk('saml_enabled_' + idx, 'Enabled', p.Enabled !== false) +
-                '</div>') +
+                chk('saml_idpinit_' + idx, 'Allow IdP-initiated SSO', p.AllowIdpInitiated) +
+                '</div>' +
+                '<p class="oidc-hint">IdP-initiated SSO skips the in-flight request check; only enable if your IdP requires it.</p>') +
             '<div class="oidc-card-actions">' +
                 '<button type="button" is="emby-button" class="raised oidc-btn-danger" data-action="remove-saml" data-idx="' + idx + '"><span>Remove</span></button>' +
             '</div>';
@@ -410,12 +413,14 @@ function collectSamlProviders(view) {
             Id: gval(view, 'saml_id_' + idx),
             DisplayName: gval(view, 'saml_name_' + idx),
             EntityId: gval(view, 'saml_entity_' + idx),
+            IdpEntityId: gval(view, 'saml_idpentity_' + idx),
             SsoUrl: gval(view, 'saml_sso_' + idx),
             UsernameClaim: gval(view, 'saml_user_' + idx) || 'NameID',
             RoleClaim: gval(view, 'saml_role_' + idx) || 'groups',
             ButtonColor: gval(view, 'saml_color_' + idx) || '#4285F4',
             IdpCertificate: certEl ? certEl.value.trim() : '',
-            Enabled: gchk(view, 'saml_enabled_' + idx)
+            Enabled: gchk(view, 'saml_enabled_' + idx),
+            AllowIdpInitiated: gchk(view, 'saml_idpinit_' + idx)
         });
     });
     return result;
@@ -513,9 +518,9 @@ export default function (view) {
             cfg.SamlProviders.push({
                 Id: 'saml-' + Date.now(),
                 DisplayName: 'New SAML Provider',
-                EntityId: '', SsoUrl: '', IdpCertificate: '',
+                EntityId: '', IdpEntityId: '', SsoUrl: '', IdpCertificate: '',
                 UsernameClaim: 'NameID', RoleClaim: 'groups',
-                ButtonColor: '#4285F4', Enabled: true
+                ButtonColor: '#4285F4', Enabled: true, AllowIdpInitiated: false
             });
             renderSamlProviders(view);
         });

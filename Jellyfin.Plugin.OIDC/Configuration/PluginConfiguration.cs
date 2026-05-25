@@ -61,12 +61,14 @@ public static class ConfigMasking
                 Id = s.Id,
                 DisplayName = s.DisplayName,
                 EntityId = s.EntityId,
+                IdpEntityId = s.IdpEntityId,
                 SsoUrl = s.SsoUrl,
                 IdpCertificate = s.IdpCertificate,
                 UsernameClaim = s.UsernameClaim,
                 RoleClaim = s.RoleClaim,
                 Enabled = s.Enabled,
-                ButtonColor = s.ButtonColor
+                ButtonColor = s.ButtonColor,
+                AllowIdpInitiated = s.AllowIdpInitiated
             }).ToList(),
             Providers = config.Providers.Select(p =>
             {
@@ -343,8 +345,18 @@ public class SamlProviderConfig
 
     public string DisplayName { get; set; } = string.Empty;
 
-    /// <summary>Service Provider EntityID — typically your Jellyfin base URL.</summary>
+    /// <summary>
+    /// Service Provider EntityID — typically your Jellyfin base URL. Sent as the
+    /// AuthnRequest Issuer and compared against the AudienceRestriction in responses.
+    /// </summary>
     public string EntityId { get; set; } = string.Empty;
+
+    /// <summary>
+    /// Expected IdP EntityID. Compared (when non-empty) against the Issuer element in
+    /// SAML Responses and assertions. Leave empty during initial setup to skip the check;
+    /// production deployments should populate this.
+    /// </summary>
+    public string IdpEntityId { get; set; } = string.Empty;
 
     /// <summary>IdP Single Sign-On URL (HTTP-Redirect binding).</summary>
     public string SsoUrl { get; set; } = string.Empty;
@@ -361,4 +373,12 @@ public class SamlProviderConfig
     public bool Enabled { get; set; } = true;
 
     public string ButtonColor { get; set; } = "#4285F4";
+
+    /// <summary>
+    /// Allow IdP-initiated SSO (no in-flight AuthnRequest, missing InResponseTo). Off by default;
+    /// when off, only SP-initiated flows whose InResponseTo matches a stored RequestID are accepted.
+    /// IdP-initiated flows lack CSRF protection so leave this off unless an integration specifically
+    /// requires it (e.g. dashboard tile launches from the IdP).
+    /// </summary>
+    public bool AllowIdpInitiated { get; set; }
 }
