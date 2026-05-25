@@ -24,8 +24,9 @@
   if (/^\/sso\/OIDC\//i.test(location.pathname)) return;
 
   function onLoginRoute() {
-    // Jellyfin-web is a hash-routed SPA: #/login.html, sometimes with ?serverid=...
-    return /(^|#)\/?login\.html\b/i.test(location.hash || '');
+    // Jellyfin-web is a hash-routed SPA. Older builds use #/login.html,
+    // newer builds use #/login (both may carry ?serverid=...&url=...).
+    return /^#\/?login(\.html)?(\?|$)/i.test(location.hash || '');
   }
 
   function hasSession() {
@@ -38,7 +39,10 @@
   }
 
   function userBailed() {
-    return /[?&]nosso=1\b/.test(location.search);
+    // Check both the real query string and the hash (Jellyfin puts query
+    // params inside the hash, e.g. #/login?serverid=...&nosso=1).
+    return /[?&]nosso=1\b/.test(location.search) ||
+           /[?&]nosso=1\b/.test(location.hash || '');
   }
 
   function readState() {
