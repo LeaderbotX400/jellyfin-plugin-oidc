@@ -171,6 +171,17 @@ public class SamlController : ControllerBase
             // Return minimal auth result for the JS to pick up
             return Ok(new { UserId = userId });
         }
+        catch (OidcUsernameCollisionException ex)
+        {
+            _logger.LogWarning(
+                "SAML login rejected: name collision for '{Username}' (provider={Provider})",
+                ex.Username, providerId);
+            return Conflict(new
+            {
+                error = "name_collision",
+                message = ex.Message
+            });
+        }
         catch (InvalidOperationException ex)
         {
             _logger.LogWarning("SAML user sync failed: {Message}", ex.Message);
