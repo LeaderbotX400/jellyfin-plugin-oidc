@@ -12,6 +12,8 @@ public class ServiceRegistrator : IPluginServiceRegistrator
         serviceCollection.AddSingleton<IPluginConfigProvider, JellyfinPluginConfigProvider>();
         serviceCollection.AddSingleton<StateManager>();
         serviceCollection.AddHostedService(sp => sp.GetRequiredService<StateManager>());
+        serviceCollection.AddSingleton<LogoutTokenReplayCache>();
+        serviceCollection.AddHostedService(sp => sp.GetRequiredService<LogoutTokenReplayCache>());
         serviceCollection.AddSingleton<OidcUserStore>();
         serviceCollection.AddSingleton<JwksCache>();
         serviceCollection.AddSingleton<OidcDiscoveryCache>();

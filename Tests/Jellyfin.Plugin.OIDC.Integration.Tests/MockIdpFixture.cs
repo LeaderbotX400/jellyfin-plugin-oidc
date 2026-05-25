@@ -150,25 +150,62 @@ public sealed class MockIdpFixture : IAsyncLifetime
     /// </summary>
     public string CreateLogoutTokenForAudience(string sub, string audience)
     {
-        var events = new Dictionary<string, object>
-        {
-            ["http://schemas.openid.net/event/backchannel-logout"] = new { }
-        };
-        var claims = new List<Claim>
-        {
-            new("sub", sub),
-            new("aud", audience),
-            new("iss", Issuer),
-            new("jti", Guid.NewGuid().ToString("N")),
-            new("events", System.Text.Json.JsonSerializer.Serialize(events), JsonClaimValueTypes.Json)
-        };
-        var creds = new SigningCredentials(_signingKey, SecurityAlgorithms.RsaSha256);
-        var jwt = new JwtSecurityToken(Issuer, audience, claims, DateTime.UtcNow.AddMinutes(-1), DateTime.UtcNow.AddMinutes(5), creds);
-        return new JwtSecurityTokenHandler().WriteToken(jwt);
+        return BuildLogoutToken(
+            sub: sub,
+            sid: null,
+            audience: audience,
+            issuer: Issuer,
+            signingKey: _signingKey,
+            algorithm: SecurityAlgorithms.RsaSha256,
+            includeIat: true,
+            includeJti: true,
+            includeExp: true,
+            iatOverride: null,
+            jtiOverride: null);
     }
 
     /// <summary>Signs a logout_token suitable for OIDC back-channel logout (RFC 8935).</summary>
-    public string CreateLogoutToken(string sub, string? sid = null)
+    public string CreateLogoutToken(
+        string? sub,
+        string? sid = null,
+        bool includeIat = true,
+        bool includeJti = true,
+        bool includeExp = true,
+        DateTime? iat = null,
+        string? jti = null,
+        bool includeNonce = false,
+        string? issuerOverride = null,
+        SecurityKey? signingKeyOverride = null,
+        string? algorithmOverride = null)
+    {
+        return BuildLogoutToken(
+            sub: sub,
+            sid: sid,
+            audience: ClientId,
+            issuer: issuerOverride ?? Issuer,
+            signingKey: signingKeyOverride ?? _signingKey,
+            algorithm: algorithmOverride ?? SecurityAlgorithms.RsaSha256,
+            includeIat: includeIat,
+            includeJti: includeJti,
+            includeExp: includeExp,
+            iatOverride: iat,
+            jtiOverride: jti,
+            includeNonce: includeNonce);
+    }
+
+    private static string BuildLogoutToken(
+        string? sub,
+        string? sid,
+        string audience,
+        string issuer,
+        SecurityKey signingKey,
+        string algorithm,
+        bool includeIat,
+        bool includeJti,
+        bool includeExp,
+        DateTime? iatOverride,
+        string? jtiOverride,
+        bool includeNonce = false)
     {
         var events = new Dictionary<string, object>
         {
@@ -176,22 +213,32 @@ public sealed class MockIdpFixture : IAsyncLifetime
         };
         var claims = new List<Claim>
         {
-            new("sub", sub),
-            new("aud", ClientId),
-            new("iss", Issuer),
-            new("jti", Guid.NewGuid().ToString("N")),
+            new("aud", audience),
+            new("iss", issuer),
             new("events", JsonSerializer.Serialize(events), JsonClaimValueTypes.Json)
         };
-        if (sid != null) claims.Add(new Claim("sid", sid));
+        if (!string.IsNullOrEmpty(sub)) claims.Add(new Claim("sub", sub));
+        if (!string.IsNullOrEmpty(sid)) claims.Add(new Claim("sid", sid));
+        if (includeJti) claims.Add(new Claim("jti", jtiOverride ?? Guid.NewGuid().ToString("N")));
+        if (includeIat)
+        {
+            var iat = iatOverride ?? DateTime.UtcNow;
+            var iatUnix = new DateTimeOffset(DateTime.SpecifyKind(iat, DateTimeKind.Utc)).ToUnixTimeSeconds();
+            claims.Add(new Claim("iat", iatUnix.ToString(), ClaimValueTypes.Integer64));
+        }
 
-        var creds = new SigningCredentials(_signingKey, SecurityAlgorithms.RsaSha256);
+        if (includeNonce) claims.Add(new Claim("nonce", Guid.NewGuid().ToString("N")));
+
+        var creds = new SigningCredentials(signingKey, algorithm);
         var jwt = new JwtSecurityToken(
-            issuer: Issuer,
-            audience: ClientId,
+            issuer: issuer,
+            audience: audience,
             claims: claims,
             notBefore: DateTime.UtcNow.AddMinutes(-1),
-            expires: DateTime.UtcNow.AddMinutes(5),
+            expires: includeExp ? DateTime.UtcNow.AddMinutes(5) : null,
             signingCredentials: creds);
         return new JwtSecurityTokenHandler().WriteToken(jwt);
     }
+
+    public RsaSecurityKey SigningKey => _signingKey;
 }

@@ -24,6 +24,7 @@ internal sealed class TestFixture
     public JwksCache JwksCache { get; }
     public OidcDiscoveryCache DiscoveryCache { get; }
     public StateManager StateManager { get; }
+    public LogoutTokenReplayCache ReplayCache { get; }
 
     public TestFixture(MockIdpFixture idp)
     {
@@ -39,6 +40,7 @@ internal sealed class TestFixture
         JwksCache = new JwksCache(httpFactory, NullLogger<JwksCache>.Instance);
         DiscoveryCache = new OidcDiscoveryCache(httpFactory, NullLogger<OidcDiscoveryCache>.Instance);
         StateManager = new StateManager(NullLogger<StateManager>.Instance);
+        ReplayCache = new LogoutTokenReplayCache(NullLogger<LogoutTokenReplayCache>.Instance);
 
         RbacService = new RbacService(
             userManagerMock.Object,

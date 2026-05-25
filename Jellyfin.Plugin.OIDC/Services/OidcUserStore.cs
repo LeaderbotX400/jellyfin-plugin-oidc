@@ -19,6 +19,16 @@ public class OidcUserRecord
     public string[] Roles { get; set; } = Array.Empty<string>();
     public string[] Entitlements { get; set; } = Array.Empty<string>();
     public DateTimeOffset LastSyncedAt { get; set; }
+
+    /// <summary>
+    /// Map of OIDC `sid` claim values to the Jellyfin DeviceId of the session they were issued to.
+    /// Populated at login when the IdP includes a `sid` in the ID token. Used by back-channel
+    /// logout to identify which specific session a logout_token refers to. NOTE: Jellyfin's
+    /// public ISessionManager.RevokeUserTokens only supports revoking ALL tokens for a user,
+    /// so sid-targeted logout is logged but currently still triggers a full revoke. Tracking
+    /// the mapping anyway so we have parity if Jellyfin gains a per-session revoke API later.
+    /// </summary>
+    public Dictionary<string, string> Sids { get; set; } = new();
 }
 
 /// <summary>Persists per-user OIDC claim snapshots and account links for re-sync and back-channel logout.</summary>
@@ -64,12 +74,33 @@ public class OidcUserStore
         return _records.Values.ToList();
     }
 
+    /// <summary>Records the OIDC `sid` claim against an existing user record, mapped to a session DeviceId.</summary>
+    public async Task RecordSidAsync(Guid userId, string sid, string deviceId)
+    {
+        if (string.IsNullOrEmpty(sid)) return;
+        await EnsureLoadedAsync().ConfigureAwait(false);
+        if (!_records.TryGetValue(userId, out var record)) return;
+        record.Sids ??= new Dictionary<string, string>();
+        record.Sids[sid] = deviceId ?? string.Empty;
+        await PersistAsync().ConfigureAwait(false);
+    }
+
     public async Task<OidcUserRecord?> GetBySubAsync(string sub, string providerId)
     {
         await EnsureLoadedAsync().ConfigureAwait(false);
         return _records.Values.FirstOrDefault(r =>
             string.Equals(r.Sub, sub, StringComparison.Ordinal) &&
             string.Equals(r.ProviderId, providerId, StringComparison.OrdinalIgnoreCase));
+    }
+
+    /// <summary>Finds the user record (for this provider) that has the given OIDC `sid` recorded.</summary>
+    public async Task<OidcUserRecord?> GetBySidAsync(string sid, string providerId)
+    {
+        if (string.IsNullOrEmpty(sid)) return null;
+        await EnsureLoadedAsync().ConfigureAwait(false);
+        return _records.Values.FirstOrDefault(r =>
+            string.Equals(r.ProviderId, providerId, StringComparison.OrdinalIgnoreCase) &&
+            r.Sids != null && r.Sids.ContainsKey(sid));
     }
 
     // ── Account linking ─────────────────────────────────────────────────────
