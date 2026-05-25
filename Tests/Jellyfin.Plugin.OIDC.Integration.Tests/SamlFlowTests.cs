@@ -1,7 +1,11 @@
 using System;
 using System.Collections.Generic;
+using System.Security.Cryptography;
+using System.Security.Cryptography.X509Certificates;
+using System.Security.Cryptography.Xml;
 using System.Text;
 using System.Threading.Tasks;
+using System.Xml;
 using Jellyfin.Data;
 using Jellyfin.Database.Implementations.Enums;
 using Jellyfin.Plugin.OIDC.Api;
@@ -24,8 +28,55 @@ public sealed class SamlFlowTests : IClassFixture<MockIdpFixture>
 
     private const string ProviderId = "saml-test";
 
-    // Minimal SAML response (no signature — IdpCertificate is empty in the test provider)
+    // Shared self-signed cert used to sign the test SAML responses. Tests must call
+    // AddSignedSamlProvider() to register a provider whose IdpCertificate trusts this signer.
+    private static readonly (X509Certificate2 Cert, RSA Key, string PemB64) Signer = CreateSigner();
+
+    private static (X509Certificate2, RSA, string) CreateSigner()
+    {
+        var rsa = RSA.Create(2048);
+        var req = new CertificateRequest(
+            "CN=integration-test-saml-signer",
+            rsa,
+            HashAlgorithmName.SHA256,
+            RSASignaturePadding.Pkcs1);
+        var cert = req.CreateSelfSigned(DateTimeOffset.UtcNow.AddDays(-1), DateTimeOffset.UtcNow.AddYears(1));
+        var pemB64 = Convert.ToBase64String(cert.Export(X509ContentType.Cert));
+        return (cert, rsa, pemB64);
+    }
+
+    private static SamlProviderConfig AddSignedSamlProvider(TestFixture fixture, string id = ProviderId)
+    {
+        var p = fixture.AddSamlProvider(id);
+        p.IdpCertificate = Signer.PemB64;
+        return p;
+    }
+
+    private static string SignAndEncode(string xml, string idToSign = "_assert1")
+    {
+        var doc = new XmlDocument { PreserveWhitespace = true };
+        doc.LoadXml(xml);
+        var signedXml = new SignedXml(doc) { SigningKey = Signer.Key };
+        signedXml.SignedInfo!.SignatureMethod = SignedXml.XmlDsigRSASHA256Url;
+        signedXml.SignedInfo.CanonicalizationMethod = SignedXml.XmlDsigExcC14NTransformUrl;
+        var reference = new Reference { Uri = "#" + idToSign, DigestMethod = "http://www.w3.org/2001/04/xmlenc#sha256" };
+        reference.AddTransform(new XmlDsigEnvelopedSignatureTransform());
+        reference.AddTransform(new XmlDsigExcC14NTransform());
+        signedXml.AddReference(reference);
+        signedXml.ComputeSignature();
+        var sig = signedXml.GetXml();
+        // Insert the Signature element right after the Assertion's Issuer (SAML schema order).
+        var assertion = doc.GetElementsByTagName("Assertion", "urn:oasis:names:tc:SAML:2.0:assertion")[0]!;
+        var issuer = assertion.FirstChild!; // Issuer
+        assertion.InsertAfter(doc.ImportNode(sig, true), issuer);
+        return Convert.ToBase64String(Encoding.UTF8.GetBytes(doc.OuterXml));
+    }
+
+    // Minimal SAML response, signed with the shared test signer.
     private static string BuildSamlResponse(string nameId, IEnumerable<string> roles, string? email = null)
+        => SignAndEncode(BuildSamlResponseXml(nameId, roles, email));
+
+    private static string BuildSamlResponseXml(string nameId, IEnumerable<string> roles, string? email = null)
     {
         var sb = new StringBuilder();
         sb.AppendLine($@"<samlp:Response xmlns:samlp=""urn:oasis:names:tc:SAML:2.0:protocol"" xmlns:saml=""urn:oasis:names:tc:SAML:2.0:assertion"" ID=""_resp1"" Version=""2.0"" IssueInstant=""2025-01-01T00:00:00Z"">");
@@ -52,14 +103,14 @@ public sealed class SamlFlowTests : IClassFixture<MockIdpFixture>
         sb.AppendLine(@"    </saml:AttributeStatement>");
         sb.AppendLine(@"  </saml:Assertion>");
         sb.AppendLine(@"</samlp:Response>");
-        return Convert.ToBase64String(Encoding.UTF8.GetBytes(sb.ToString()));
+        return sb.ToString();
     }
 
     [Fact]
     public async Task AcsFlow_ValidResponse_ProvisionsUserAndApplliesRoles()
     {
         var fixture = new TestFixture(_idp);
-        fixture.AddSamlProvider(ProviderId);
+        AddSignedSamlProvider(fixture);
         fixture.ConfigProvider.Configuration.RoleMappings = new List<RoleMapping>
         {
             new() { RoleName = "admin", IsAdmin = true }
@@ -96,13 +147,12 @@ public sealed class SamlFlowTests : IClassFixture<MockIdpFixture>
     public async Task AcsFlow_ExpiredAssertion_Returns400()
     {
         var fixture = new TestFixture(_idp);
-        fixture.AddSamlProvider(ProviderId);
+        AddSignedSamlProvider(fixture);
 
-        // Build a response with NotOnOrAfter in the past
-        var expired = BuildSamlResponse(nameId: "alice", roles: new[] { "user" })
-            .Pipe(b64 => Encoding.UTF8.GetString(Convert.FromBase64String(b64)))
-            .Replace("2099-12-31T23:59:59Z", "2000-01-01T00:00:00Z", StringComparison.Ordinal)
-            .Pipe(xml => Convert.ToBase64String(Encoding.UTF8.GetBytes(xml)));
+        // Build a response with NotOnOrAfter in the past, then sign it.
+        var expiredXml = BuildSamlResponseXml(nameId: "alice", roles: new[] { "user" })
+            .Replace("2099-12-31T23:59:59Z", "2000-01-01T00:00:00Z", StringComparison.Ordinal);
+        var expired = SignAndEncode(expiredXml);
 
         var result = await fixture.SamlController.AssertionConsumerService(
             ProviderId, expired, relayState: null);
@@ -113,7 +163,7 @@ public sealed class SamlFlowTests : IClassFixture<MockIdpFixture>
     public async Task AcsFlow_MissingSamlResponse_Returns400()
     {
         var fixture = new TestFixture(_idp);
-        fixture.AddSamlProvider(ProviderId);
+        AddSignedSamlProvider(fixture);
         var result = await fixture.SamlController.AssertionConsumerService(
             ProviderId, samlResponse: string.Empty, relayState: null);
         Assert.IsType<BadRequestObjectResult>(result);

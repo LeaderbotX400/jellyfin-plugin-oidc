@@ -107,8 +107,9 @@ internal sealed class TestFixture
     }
 
     /// <summary>
-    /// Adds a SAML provider with no IdP certificate configured (signature verification is skipped).
-    /// Tests that care about signature validation should set <c>IdpCertificate</c> explicitly.
+    /// Adds a SAML provider with no IdP certificate configured. SAML responses will be
+    /// rejected by signature validation unless the caller assigns <c>IdpCertificate</c>
+    /// and signs responses accordingly.
     /// </summary>
     public SamlProviderConfig AddSamlProvider(string id = "saml-test")
     {
