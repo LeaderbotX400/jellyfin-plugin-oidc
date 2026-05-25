@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using Jellyfin.Plugin.OIDC.Api;
 using Jellyfin.Plugin.OIDC.Configuration;
 using Jellyfin.Plugin.OIDC.Services;
 using MediaBrowser.Common.Configuration;
@@ -27,15 +28,35 @@ public class OidcPlugin : BasePlugin<PluginConfiguration>, IHasWebPages
         ConfigurationChanged += (_, cfg) => RunMigration((PluginConfiguration)cfg);
     }
 
+    public static OidcPlugin? Instance { get; private set; }
+
+    public override string Name => "OIDC RBAC";
+
+    public override Guid Id => Guid.Parse("d4e5f6a7-b8c9-0d1e-2f3a-4b5c6d7e8f90");
+
+    public override string Description => "Advanced OIDC authentication with role-based library access control";
+
     /// <summary>
-    /// Refuses to persist provider configs whose endpoints aren't HTTPS (unless the provider explicitly
-    /// opts in to <c>AllowInsecureAuthority</c> + uses a loopback host). Catches misconfiguration at
-    /// save time rather than at first login attempt.
+    /// Defence-in-depth on every config save:
+    ///   1. Reject configs with invalid provider ids (charset / length) — the web UI validates via
+    ///      /sso/OIDC/Config/Validate, but a determined caller hitting the standard plugin config
+    ///      endpoint directly would bypass that; this is the last line.
+    ///   2. Refuse provider configs whose endpoints aren't HTTPS (unless that provider explicitly
+    ///      opts in to <c>AllowInsecureAuthority</c> + uses a loopback host). Catches
+    ///      misconfiguration at save time rather than at first login attempt.
     /// </summary>
     public override void UpdateConfiguration(BasePluginConfiguration configuration)
     {
         if (configuration is PluginConfiguration cfg)
         {
+            var errors = ConfigController.ValidateConfiguration(cfg);
+            if (errors.Count > 0)
+            {
+                throw new ArgumentException(
+                    "Invalid plugin configuration: " + string.Join("; ", errors),
+                    nameof(configuration));
+            }
+
             foreach (var p in cfg.Providers)
             {
                 if (!p.Enabled) continue;
@@ -45,14 +66,6 @@ public class OidcPlugin : BasePlugin<PluginConfiguration>, IHasWebPages
 
         base.UpdateConfiguration(configuration);
     }
-
-    public static OidcPlugin? Instance { get; private set; }
-
-    public override string Name => "OIDC RBAC";
-
-    public override Guid Id => Guid.Parse("d4e5f6a7-b8c9-0d1e-2f3a-4b5c6d7e8f90");
-
-    public override string Description => "Advanced OIDC authentication with role-based library access control";
 
     public IEnumerable<PluginPageInfo> GetPages()
     {

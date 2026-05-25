@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using System.Linq;
 using System.Reflection;
 using System.Text.Json.Serialization;
+using System.Text.RegularExpressions;
 using MediaBrowser.Model.Plugins;
 
 namespace Jellyfin.Plugin.OIDC.Configuration;
@@ -160,6 +161,24 @@ public static class ConfigMasking
             // Empty string or any other value: use as-is (clear or overwrite)
         }
     }
+}
+
+/// <summary>
+/// Validation helpers for provider identifiers. Provider IDs are interpolated into URLs,
+/// HTML <c>data-</c> attributes, and JS string literals in the callback HTML. A strict
+/// charset (A-Z, a-z, 0-9, underscore, hyphen, 1-64 chars) keeps every downstream context safe
+/// even without further escaping.
+/// </summary>
+public static class ProviderIdValidation
+{
+    public const string CharsetDescription = "letters, digits, underscore, or hyphen; 1-64 chars";
+
+    private static readonly Regex Pattern = new(
+        "^[A-Za-z0-9_-]{1,64}$",
+        RegexOptions.Compiled | RegexOptions.CultureInvariant);
+
+    public static bool IsValid(string? providerId) =>
+        !string.IsNullOrEmpty(providerId) && Pattern.IsMatch(providerId);
 }
 
 public class PluginConfiguration : BasePluginConfiguration

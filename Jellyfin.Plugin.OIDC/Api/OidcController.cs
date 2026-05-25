@@ -5,6 +5,7 @@ using System.Linq;
 using System.Net.Http;
 using System.Security.Cryptography;
 using System.Text;
+using System.Text.Json;
 using System.Threading;
 using System.Threading.Tasks;
 using IdentityModel;
@@ -69,6 +70,11 @@ public class OidcController : ControllerBase
     [HttpGet("Start/{providerId}")]
     public async Task<ActionResult> Start(string providerId)
     {
+        if (!ProviderIdValidation.IsValid(providerId))
+        {
+            return BadRequest($"Invalid provider id (must be {ProviderIdValidation.CharsetDescription})");
+        }
+
         var provider = GetProvider(providerId);
         if (provider == null)
         {
@@ -87,12 +93,21 @@ public class OidcController : ControllerBase
         var nonce = CryptoRandom.CreateUniqueId(32);
         var redirectUri = BuildCallbackUri(providerId);
 
+        // Issue a per-request CSRF token, store its SHA-256 hash in server-side state,
+        // and emit the raw token as a strict cookie. The /Callback handler must read the
+        // cookie back and prove possession before accepting the OIDC response — this prevents
+        // login-CSRF (an attacker forcing a victim's browser to complete the attacker's flow).
+        var csrfToken = StateManager.GenerateCsprngToken();
+        var csrfHash = StateManager.HashToken(csrfToken);
+        SetCsrfBindingCookie(providerId, csrfToken);
+
         var state = new OidcState
         {
             ProviderId = providerId,
             Nonce = nonce,
             CodeVerifier = codeVerifier,
-            RedirectUri = redirectUri
+            RedirectUri = redirectUri,
+            CsrfBindingHash = csrfHash
         };
 
         var stateKey = _stateManager.StoreState(state);
@@ -132,6 +147,14 @@ public class OidcController : ControllerBase
         if (!string.Equals(oidcState.ProviderId, providerId, StringComparison.OrdinalIgnoreCase))
         {
             return BadRequest("Provider mismatch");
+        }
+
+        // Verify the per-request CSRF cookie that /Start set. Missing or mismatched cookie
+        // means this callback wasn't initiated by this browser session — reject.
+        if (!VerifyAndClearCsrfBindingCookie(providerId, oidcState))
+        {
+            _logger.LogWarning("OIDC callback rejected: missing or invalid CSRF binding cookie for provider {Provider}", providerId);
+            return BadRequest("Authentication session not initiated by this browser. Please start sign-in again.");
         }
 
         var provider = GetProvider(providerId);
@@ -304,6 +327,7 @@ public class OidcController : ControllerBase
             EmailVerified = emailVerified
         });
 
+        SetCallbackSecurityHeaders();
         return Content(BuildCallbackHtml(sessionToken, providerId), "text/html");
     }
 
@@ -427,10 +451,27 @@ public class OidcController : ControllerBase
 
     // ── Account linking endpoints ─────────────────────────────────────────────
 
-    [HttpGet("link/start/{providerId}")]
+    // Link flow uses POST (not GET) to defeat naive cross-site request forgery:
+    // a malicious <img src="...link/start/..."> or top-level link cannot trigger this endpoint
+    // without an attacker-controlled origin running JS that already passes [Authorize]'s
+    // bearer token. We also require Content-Type: application/json so a cross-origin form POST
+    // (which browsers WILL send without preflight for x-www-form-urlencoded / multipart /
+    // text-plain) cannot reach it — only same-origin JS with the Jellyfin token works.
+    //
+    // Trade-off (documented per spec): a full anti-CSRF token-pair would be the gold standard,
+    // but Jellyfin's auth token is delivered via header (not cookie) so it's already not
+    // automatically attached cross-site. The POST + JSON-only requirement closes the remaining
+    // hole — a victim browser cannot be tricked into completing a link-to-attacker-IdP flow.
+    [HttpPost("link/start/{providerId}")]
     [Authorize]
+    [Consumes("application/json")]
     public async Task<ActionResult> LinkStart(string providerId)
     {
+        if (!ProviderIdValidation.IsValid(providerId))
+        {
+            return BadRequest($"Invalid provider id (must be {ProviderIdValidation.CharsetDescription})");
+        }
+
         var provider = GetProvider(providerId);
         if (provider == null)
         {
@@ -455,13 +496,20 @@ public class OidcController : ControllerBase
         var nonce = CryptoRandom.CreateUniqueId(32);
         var redirectUri = BuildCallbackUri(providerId);
 
+        // Same CSRF-binding cookie as the login flow — the IdP redirect lands on /Callback,
+        // which checks the cookie hash before honouring the state.
+        var csrfToken = StateManager.GenerateCsprngToken();
+        var csrfHash = StateManager.HashToken(csrfToken);
+        SetCsrfBindingCookie(providerId, csrfToken);
+
         var stateKey = _stateManager.StoreState(new OidcState
         {
             ProviderId = providerId,
             Nonce = nonce,
             CodeVerifier = codeVerifier,
             RedirectUri = redirectUri,
-            LinkingForUserId = jellyfinUserId.Value
+            LinkingForUserId = jellyfinUserId.Value,
+            CsrfBindingHash = csrfHash
         });
 
         var authorizeUrl = new RequestUrl(disco.AuthorizeEndpoint!);
@@ -580,8 +628,89 @@ public class OidcController : ControllerBase
         return new Parameters(pairs);
     }
 
+    // Cookie configuration:
+    //   * On HTTPS we use the `__Host-` prefix — browsers enforce Secure + Path=/ + no Domain,
+    //     making cookie injection from a sibling subdomain impossible.
+    //   * On plain HTTP (dev only) the `__Host-` prefix would be rejected by the browser
+    //     because Secure must be set, so we drop the prefix. This is documented in README and
+    //     is acceptable because the entire login flow is already insecure over HTTP.
+    private const string CsrfCookieSuffix = "oidc-csrf";
+
+    private string GetCsrfCookieName(string providerId)
+    {
+        // Provider id charset is validated (A-Za-z0-9_-) so safe to splice into a cookie name.
+        var prefix = Request.IsHttps ? "__Host-" : string.Empty;
+        return $"{prefix}{CsrfCookieSuffix}-{providerId}";
+    }
+
+    private void SetCsrfBindingCookie(string providerId, string token)
+    {
+        var opts = new Microsoft.AspNetCore.Http.CookieOptions
+        {
+            HttpOnly = true,
+            Secure = Request.IsHttps,
+            SameSite = Microsoft.AspNetCore.Http.SameSiteMode.Lax,
+            Path = "/",
+            // Lifetime mirrors the server-side state expiry. The cookie is single-use; the
+            // /Callback handler clears it on success or on hash mismatch.
+            MaxAge = TimeSpan.FromMinutes(10)
+        };
+        Response.Cookies.Append(GetCsrfCookieName(providerId), token, opts);
+    }
+
+    private bool VerifyAndClearCsrfBindingCookie(string providerId, OidcState state)
+    {
+        var cookieName = GetCsrfCookieName(providerId);
+        var present = Request.Cookies.TryGetValue(cookieName, out var raw);
+
+        // Always clear the cookie post-callback so a stale token can't be replayed.
+        var clearOpts = new Microsoft.AspNetCore.Http.CookieOptions
+        {
+            HttpOnly = true,
+            Secure = Request.IsHttps,
+            SameSite = Microsoft.AspNetCore.Http.SameSiteMode.Lax,
+            Path = "/"
+        };
+        Response.Cookies.Delete(cookieName, clearOpts);
+
+        if (state.CsrfBindingHash == null)
+        {
+            // No binding was issued (legacy state path or test). Reject to be safe.
+            return false;
+        }
+
+        if (!present || string.IsNullOrEmpty(raw))
+        {
+            return false;
+        }
+
+        var presented = StateManager.HashToken(raw!);
+        return CryptographicOperations.FixedTimeEquals(presented, state.CsrfBindingHash);
+    }
+
+    private void SetCallbackSecurityHeaders()
+    {
+        // The callback HTML must run a small bootstrap script that hands the session token
+        // back to /Auth and writes Jellyfin's localStorage credentials. We pin everything else
+        // off (no <img>, no external CSS, no XHR to other origins). The 'unsafe-inline' on
+        // script-src is regrettable but mandated by Jellyfin's plugin embedding model — we
+        // cannot ship a separate JS file with a hash-pinned <script src>. Defense-in-depth
+        // here is the value-side hardening: every interpolation is JSON-encoded and the
+        // provider id charset is validated at config-save time.
+        Response.Headers["Content-Security-Policy"] =
+            "default-src 'none'; script-src 'unsafe-inline'; connect-src 'self'; style-src 'unsafe-inline'";
+        Response.Headers["X-Content-Type-Options"] = "nosniff";
+        Response.Headers["Referrer-Policy"] = "no-referrer";
+    }
+
     private static string BuildCallbackHtml(string sessionToken, string providerId)
     {
+        // Every value that crosses into the <script> body is JSON-encoded. JsonSerializer
+        // produces a valid JS string literal (single tokens like </script> are escaped as
+        // </script>, etc.). This is the defence even if a provider id with hostile
+        // characters somehow bypassed the regex at the config layer.
+        var encodedToken = JsonSerializer.Serialize(sessionToken);
+        var encodedProvider = JsonSerializer.Serialize(providerId);
         return $$"""
         <!DOCTYPE html>
         <html>
@@ -591,13 +720,13 @@ public class OidcController : ControllerBase
         <p id="status">Please wait...</p>
         <script>
         (function() {
-            const token = '{{sessionToken}}';
-            const providerId = '{{providerId}}';
+            const token = {{encodedToken}};
+            const providerId = {{encodedProvider}};
 
             const deviceId = localStorage.getItem('_deviceId2') || crypto.randomUUID();
             localStorage.setItem('_deviceId2', deviceId);
 
-            fetch('/sso/OIDC/Auth/' + providerId, {
+            fetch('/sso/OIDC/Auth/' + encodeURIComponent(providerId), {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({

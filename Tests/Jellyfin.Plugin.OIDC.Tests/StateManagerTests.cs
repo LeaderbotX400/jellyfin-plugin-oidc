@@ -90,6 +90,44 @@ public class StateManagerTests
     }
 
     [Fact]
+    public void GenerateCsprngToken_IsNotGuidShaped_AndIsLongEnough()
+    {
+        // Guid.NewGuid().ToString("N") = 32 hex chars. CSPRNG tokens (32 random bytes
+        // base64url-encoded) are 43 chars and contain non-hex characters like '_' or '-'
+        // or mixed case. Assert both: length > 32 and the token is NOT all lower-hex.
+        for (var i = 0; i < 16; i++)
+        {
+            var t = StateManager.GenerateCsprngToken();
+            Assert.True(t.Length >= 43, $"Token too short: {t.Length}");
+            var isGuidShaped = t.Length == 32 && System.Text.RegularExpressions.Regex.IsMatch(t, "^[0-9a-f]+$");
+            Assert.False(isGuidShaped, "Token looks like a Guid 'N' format — not CSPRNG-base64url");
+        }
+    }
+
+    [Fact]
+    public void GenerateCsprngToken_AreUnique()
+    {
+        var bag = new System.Collections.Generic.HashSet<string>();
+        for (var i = 0; i < 1024; i++)
+        {
+            Assert.True(bag.Add(StateManager.GenerateCsprngToken()), "Collision in CSPRNG token generator");
+        }
+    }
+
+    [Fact]
+    public void HashToken_IsStableAndFixedTimeComparable()
+    {
+        var token = StateManager.GenerateCsprngToken();
+        var a = StateManager.HashToken(token);
+        var b = StateManager.HashToken(token);
+        Assert.Equal(32, a.Length);
+        Assert.True(System.Security.Cryptography.CryptographicOperations.FixedTimeEquals(a, b));
+
+        var other = StateManager.HashToken(StateManager.GenerateCsprngToken());
+        Assert.False(System.Security.Cryptography.CryptographicOperations.FixedTimeEquals(a, other));
+    }
+
+    [Fact]
     public void ConcurrentStateStorage_IsThreadSafe()
     {
         var sm = Create();

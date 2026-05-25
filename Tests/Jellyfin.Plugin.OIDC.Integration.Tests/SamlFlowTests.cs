@@ -273,14 +273,8 @@ public sealed class SamlFlowTests : IClassFixture<MockIdpFixture>
         Assert.IsType<BadRequestObjectResult>(second);
     }
 
-    private static string ExtractSessionToken(ContentResult content)
-    {
-        const string marker = "const token = '";
-        var idx = content.Content!.IndexOf(marker, StringComparison.Ordinal);
-        var start = idx + marker.Length;
-        var end = content.Content.IndexOf('\'', start);
-        return content.Content.Substring(start, end - start);
-    }
+    private static string ExtractSessionToken(ContentResult content) =>
+        TestFixture.ExtractSessionTokenFromHtml(content.Content ?? string.Empty);
 }
 
 internal static class StringPipe

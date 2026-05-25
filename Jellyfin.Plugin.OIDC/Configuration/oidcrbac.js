@@ -562,6 +562,23 @@ export default function (view) {
         cfg.RbacBehavior = view.querySelector('#rbacBehavior').value || 'EntitlementsAuthoritative';
         cfg.AllowLastAdminDemotion = gchk(view, 'allowLastAdminDemotion');
 
+        // Client-side provider id check — must match server regex ^[A-Za-z0-9_-]{1,64}$.
+        // The server's UpdateConfiguration validates again as the source of truth; this just
+        // gives a faster, friendlier error message before the round-trip.
+        var providerIdPattern = /^[A-Za-z0-9_-]{1,64}$/;
+        var badProviders = (cfg.Providers || [])
+            .filter(function (p) { return !providerIdPattern.test(p.ProviderId || ''); })
+            .map(function (p) { return p.DisplayName || '(unnamed)'; });
+        var badSaml = (cfg.SamlProviders || [])
+            .filter(function (p) { return !providerIdPattern.test(p.Id || ''); })
+            .map(function (p) { return p.DisplayName || '(unnamed)'; });
+        if (badProviders.length || badSaml.length) {
+            Dashboard.hideLoadingMsg();
+            var names = badProviders.concat(badSaml).join(', ');
+            Dashboard.alert('Provider id must be letters, digits, underscore, or hyphen (1-64 chars). Fix: ' + names);
+            return;
+        }
+
         // Run config validation before saving. Warnings are non-blocking — save proceeds regardless,
         // but any warnings are shown prominently so the admin can make an informed decision.
         ApiClient.ajax({
