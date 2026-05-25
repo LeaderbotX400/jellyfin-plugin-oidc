@@ -8,6 +8,14 @@
     "category": "Authentication",
     "versions": [
       {
+        "version": "0.1.1.0",
+        "changelog": "Release v0.1.1",
+        "targetAbi": "10.11.0.0",
+        "sourceUrl": "https://github.com/LeaderbotX400/jellyfin-plugin-oidc/releases/download/v0.1.1/oidc-rbac.zip",
+        "checksum": "de44f1598fb3989c599676fe464c07e6",
+        "timestamp": "2026-05-25T14:34:33Z"
+      },
+      {
         "version": "0.1.0.0",
         "changelog": "Release v0.1.0",
         "targetAbi": "10.11.0.0",
