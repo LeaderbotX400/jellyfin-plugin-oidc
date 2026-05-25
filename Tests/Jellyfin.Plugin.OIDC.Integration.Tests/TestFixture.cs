@@ -104,7 +104,9 @@ internal sealed class TestFixture
             EntitlementClaim = "entitlements",
             DisplayNameClaim = "name",
             EnableEntitlements = true,
-            Enabled = true
+            Enabled = true,
+            // WireMock IdP serves plain HTTP on localhost; opt in to the dev-only bypass.
+            AllowInsecureAuthority = true
         };
         ConfigProvider.Configuration.Providers.Add(provider);
         ConfigProvider.Configuration.AutoCreateUsers = true;

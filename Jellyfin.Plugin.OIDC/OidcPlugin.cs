@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using Jellyfin.Plugin.OIDC.Configuration;
+using Jellyfin.Plugin.OIDC.Services;
 using MediaBrowser.Common.Configuration;
 using MediaBrowser.Common.Plugins;
 using MediaBrowser.Model.Plugins;
@@ -24,6 +25,25 @@ public class OidcPlugin : BasePlugin<PluginConfiguration>, IHasWebPages
 
         // Re-run after every config save (e.g. from the admin UI).
         ConfigurationChanged += (_, cfg) => RunMigration((PluginConfiguration)cfg);
+    }
+
+    /// <summary>
+    /// Refuses to persist provider configs whose endpoints aren't HTTPS (unless the provider explicitly
+    /// opts in to <c>AllowInsecureAuthority</c> + uses a loopback host). Catches misconfiguration at
+    /// save time rather than at first login attempt.
+    /// </summary>
+    public override void UpdateConfiguration(BasePluginConfiguration configuration)
+    {
+        if (configuration is PluginConfiguration cfg)
+        {
+            foreach (var p in cfg.Providers)
+            {
+                if (!p.Enabled) continue;
+                ProviderConfigValidator.ValidateOrThrow(p);
+            }
+        }
+
+        base.UpdateConfiguration(configuration);
     }
 
     public static OidcPlugin? Instance { get; private set; }

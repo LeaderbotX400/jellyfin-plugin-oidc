@@ -157,11 +157,40 @@ public sealed class OidcFlowTests : IClassFixture<MockIdpFixture>
         // with HS256 + the client_secret as the key. JWKS is empty in that case.
         // This test proves the plugin can validate symmetric-signed tokens too.
         var fixture = new TestFixture(_idp);
-        fixture.AddProvider();
+        var provider = fixture.AddProvider();
+        // HS256 is off by default in v0.x configs; this test explicitly opts in to mirror
+        // an admin who knowingly enables symmetric signing for an Authentik-style IdP.
+        provider.AllowedSigningAlgorithms = new List<string> { "HS256", "RS256" };
 
         await fixture.RunFullFlow("hmacuser", "sub-hmac", useHmacSigning: true);
 
         Assert.NotNull(fixture.UserStore.GetByName("hmacuser"));
+    }
+
+    [Fact]
+    public async Task FullFlow_Hs256AgainstRsOnlyProvider_IsRejected()
+    {
+        // An attacker (or compromised client) that gets the client_secret can mint HS256 tokens.
+        // If the provider's AllowedSigningAlgorithms only lists RS*/ES*/PS*, the controller must refuse.
+        var fixture = new TestFixture(_idp);
+        var provider = fixture.AddProvider(); // default allowlist excludes HS*
+
+        var startResult = await fixture.Controller.Start(ProviderId);
+        var redirect = (RedirectResult)startResult;
+        var state = ExtractStateFromUrl(redirect.Url);
+        var nonce = ExtractParamFromUrl(redirect.Url, "nonce");
+
+        _idp.EnqueueTokenResponse(
+            sub: "hostile",
+            username: "hostile",
+            nonce: nonce,
+            useHmacSigning: true);
+
+        var callbackResult = await fixture.Controller.Callback(ProviderId, code: "code", state: state);
+        // The resolver throws SecurityTokenInvalidSignatureException → controller returns 502
+        // ("Failed to resolve signing keys"). Either way: not OK, no user created.
+        Assert.False(callbackResult is ContentResult, "Hostile HS256 token must not produce an auth content page");
+        Assert.Null(fixture.UserStore.GetByName("hostile"));
     }
 
     [Fact]

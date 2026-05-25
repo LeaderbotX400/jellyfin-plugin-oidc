@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using System.IdentityModel.Tokens.Jwt;
 using System.Linq;
 using System.Text;
@@ -12,7 +13,9 @@ namespace Jellyfin.Plugin.OIDC.Services;
 ///
 /// - For HMAC algorithms (HS256/384/512) — symmetric, the client_secret is the signing key
 ///   (OIDC Core 1.0 §10.1 / RFC 7518 §3.2). JWKS is irrelevant; some IdPs serve an empty JWKS.
+///   Only returned when the provider's allowed-algorithm list explicitly opts in to HS*.
 /// - For asymmetric algorithms (RS256, ES256, PS256, etc.) — fetch the IdP's public keys from JWKS.
+///   On an unknown <c>kid</c> (likely an IdP key rotation), force one rate-limited JWKS refresh and retry.
 /// </summary>
 public static class SigningKeyResolver
 {
@@ -20,12 +23,28 @@ public static class SigningKeyResolver
         string rawJwt,
         string clientSecret,
         string? jwksUri,
-        JwksCache jwksCache)
+        JwksCache jwksCache,
+        IReadOnlyCollection<string> allowedAlgorithms)
     {
-        var alg = new JwtSecurityToken(rawJwt).Header.Alg ?? string.Empty;
+        if (allowedAlgorithms == null || allowedAlgorithms.Count == 0)
+        {
+            throw new InvalidOperationException(
+                "Provider has no AllowedSigningAlgorithms configured — refusing to validate token");
+        }
+
+        var jwt = new JwtSecurityToken(rawJwt);
+        var alg = jwt.Header.Alg ?? string.Empty;
+
+        if (!allowedAlgorithms.Contains(alg, StringComparer.Ordinal))
+        {
+            throw new SecurityTokenInvalidSignatureException(
+                $"Token alg '{alg}' is not in the provider's AllowedSigningAlgorithms list");
+        }
 
         if (alg.StartsWith("HS", StringComparison.Ordinal))
         {
+            // Defence in depth: even if a misconfigured provider has HS* in the allowlist,
+            // we still require a non-empty client_secret to use as the HMAC key.
             if (string.IsNullOrEmpty(clientSecret))
             {
                 throw new InvalidOperationException(
@@ -45,6 +64,30 @@ public static class SigningKeyResolver
         }
 
         var keys = await jwksCache.GetKeysAsync(jwksUri).ConfigureAwait(false);
+        var kid = jwt.Header.Kid;
+
+        if (!string.IsNullOrEmpty(kid) && !KeySetContainsKid(keys, kid))
+        {
+            // Possible IdP key rotation. Force one rate-limited refresh and retry.
+            var refreshed = await jwksCache.RefreshAsync(jwksUri).ConfigureAwait(false);
+            if (refreshed != null)
+            {
+                keys = refreshed;
+            }
+        }
+
         return keys.GetSigningKeys().ToArray();
+    }
+
+    private static bool KeySetContainsKid(JsonWebKeySet keys, string kid)
+    {
+        foreach (var k in keys.Keys)
+        {
+            if (string.Equals(k.Kid, kid, StringComparison.Ordinal))
+            {
+                return true;
+            }
+        }
+        return false;
     }
 }

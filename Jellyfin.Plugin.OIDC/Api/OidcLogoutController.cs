@@ -123,7 +123,7 @@ public class OidcLogoutController : ControllerBase
             DiscoveryDocumentResponse disco;
             try
             {
-                disco = await _discoveryCache.GetAsync(p.Authority).ConfigureAwait(false);
+                disco = await _discoveryCache.GetAsync(p.Authority, p.AllowInsecureAuthority).ConfigureAwait(false);
             }
             catch (Exception ex)
             {
@@ -168,7 +168,8 @@ public class OidcLogoutController : ControllerBase
         try
         {
             signingKeys = await SigningKeyResolver.ResolveAsync(
-                logout_token, provider.ClientSecret, discovery.JwksUri, _jwksCache).ConfigureAwait(false);
+                logout_token, provider.ClientSecret, discovery.JwksUri, _jwksCache,
+                provider.AllowedSigningAlgorithms).ConfigureAwait(false);
         }
         catch (Exception ex)
         {
@@ -181,6 +182,7 @@ public class OidcLogoutController : ControllerBase
             ValidIssuer = discovery.Issuer,
             ValidAudience = provider.ClientId,
             IssuerSigningKeys = signingKeys,
+            ValidAlgorithms = provider.AllowedSigningAlgorithms,
             ValidateIssuer = true,
             ValidateAudience = true,
             // We do our own lifetime check (RFC 8935 allows logout_tokens without exp).

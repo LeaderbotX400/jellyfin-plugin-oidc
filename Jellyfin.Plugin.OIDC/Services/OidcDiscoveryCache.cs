@@ -21,19 +21,44 @@ public sealed class OidcDiscoveryCache
     private readonly ConcurrentDictionary<string, SemaphoreSlim> _locks = new();
     private readonly IHttpClientFactory _httpClientFactory;
     private readonly ILogger<OidcDiscoveryCache> _logger;
+    private readonly bool _allowEndpointMismatch;
 
+    /// <summary>Production ctor: strict endpoint validation.</summary>
     public OidcDiscoveryCache(IHttpClientFactory httpClientFactory, ILogger<OidcDiscoveryCache> logger)
+        : this(httpClientFactory, logger, allowEndpointMismatch: false)
+    {
+    }
+
+    /// <summary>
+    /// Test-only ctor that disables IdentityModel's endpoint-vs-authority host match.
+    /// NOT exposed in <c>PluginConfiguration</c>; intended for in-process mock IdPs whose
+    /// endpoint hosts may not align with the authority host (e.g. WireMock random ports).
+    /// Production code paths must construct with the default ctor.
+    /// </summary>
+    public OidcDiscoveryCache(
+        IHttpClientFactory httpClientFactory,
+        ILogger<OidcDiscoveryCache> logger,
+        bool allowEndpointMismatch)
     {
         _httpClientFactory = httpClientFactory;
         _logger = logger;
+        _allowEndpointMismatch = allowEndpointMismatch;
     }
 
     /// <summary>
     /// Returns a cached discovery document for <paramref name="authority"/>, fetching if stale or missing.
     /// Default TTL is 1 hour. Errors are not cached — callers can retry on transient IdP outages.
     /// </summary>
-    public async Task<DiscoveryDocumentResponse> GetAsync(string authority, TimeSpan? ttl = null)
+    /// <param name="authority">The IdP authority (issuer base URL).</param>
+    /// <param name="allowInsecureAuthority">When true, allows plain HTTP to a localhost authority. Default false.</param>
+    /// <param name="ttl">Optional cache TTL override.</param>
+    public async Task<DiscoveryDocumentResponse> GetAsync(
+        string authority,
+        bool allowInsecureAuthority = false,
+        TimeSpan? ttl = null)
     {
+        SecurityValidation.EnsureSecureUrl(authority, allowInsecureAuthority, nameof(authority));
+
         var effectiveTtl = ttl ?? TimeSpan.FromHours(1);
 
         if (_cache.TryGetValue(authority, out var cached) && cached.ExpiresAt > DateTime.UtcNow)
@@ -59,12 +84,21 @@ public sealed class OidcDiscoveryCache
                 Policy = new DiscoveryPolicy
                 {
                     ValidateIssuerName = true,
-                    ValidateEndpoints = false
+                    ValidateEndpoints = !_allowEndpointMismatch
                 }
             }).ConfigureAwait(false);
 
             if (!doc.IsError)
             {
+                // Defence in depth: even after IdentityModel validation, double-check that the
+                // endpoints we're about to use are themselves not http:// to an arbitrary host.
+                SecurityValidation.EnsureSecureUrl(doc.TokenEndpoint, allowInsecureAuthority, "token_endpoint");
+                SecurityValidation.EnsureSecureUrl(doc.AuthorizeEndpoint, allowInsecureAuthority, "authorization_endpoint");
+                if (!string.IsNullOrEmpty(doc.JwksUri))
+                {
+                    SecurityValidation.EnsureSecureUrl(doc.JwksUri, allowInsecureAuthority, "jwks_uri");
+                }
+
                 _cache[authority] = new CacheEntry(doc, DateTime.UtcNow.Add(effectiveTtl));
             }
 

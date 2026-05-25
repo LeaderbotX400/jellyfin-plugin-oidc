@@ -145,6 +145,15 @@ public class ConfigController : ControllerBase
             return Ok(new { Success = false, Error = "Authority URL is required" });
         }
 
+        try
+        {
+            SecurityValidation.EnsureSecureUrl(request.Authority, request.AllowInsecureAuthority, "Authority");
+        }
+        catch (System.InvalidOperationException ex)
+        {
+            return Ok(new { Success = false, Error = ex.Message });
+        }
+
         var httpClient = _httpClientFactory.CreateClient("OidcPlugin");
         var disco = await httpClient.GetDiscoveryDocumentAsync(new DiscoveryDocumentRequest
         {
@@ -152,7 +161,7 @@ public class ConfigController : ControllerBase
             Policy = new DiscoveryPolicy
             {
                 ValidateIssuerName = true,
-                ValidateEndpoints = false
+                ValidateEndpoints = true
             }
         }).ConfigureAwait(false);
 
@@ -209,4 +218,7 @@ public class ProviderTestRequest
 {
     public string Authority { get; set; } = string.Empty;
     public string? Scopes { get; set; }
+
+    /// <summary>Mirrors <c>OidcProviderConfig.AllowInsecureAuthority</c> so the admin UI can test localhost dev IdPs.</summary>
+    public bool AllowInsecureAuthority { get; set; }
 }

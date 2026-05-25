@@ -181,7 +181,8 @@ public class OidcController : ControllerBase
         try
         {
             signingKeys = await SigningKeyResolver.ResolveAsync(
-                tokenString, provider.ClientSecret, disco.JwksUri, _jwksCache).ConfigureAwait(false);
+                tokenString, provider.ClientSecret, disco.JwksUri, _jwksCache,
+                provider.AllowedSigningAlgorithms).ConfigureAwait(false);
         }
         catch (Exception ex)
         {
@@ -194,6 +195,7 @@ public class OidcController : ControllerBase
             ValidIssuer = disco.Issuer,
             ValidAudience = provider.ClientId,
             IssuerSigningKeys = signingKeys,
+            ValidAlgorithms = provider.AllowedSigningAlgorithms,
             ValidateIssuer = true,
             ValidateAudience = true,
             ValidateLifetime = true,
@@ -547,7 +549,7 @@ public class OidcController : ControllerBase
     }
 
     private Task<DiscoveryDocumentResponse> GetDiscoveryDocumentAsync(OidcProviderConfig provider) =>
-        _discoveryCache.GetAsync(provider.Authority);
+        _discoveryCache.GetAsync(provider.Authority, provider.AllowInsecureAuthority);
 
     private string BuildCallbackUri(string providerId)
     {

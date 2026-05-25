@@ -79,6 +79,40 @@ public class JwksCacheTests
     }
 
     [Fact]
+    public async Task RefreshAsync_RateLimited_FetchesOnce()
+    {
+        // Two consecutive misses (≈"unknown kid" recovery attempts) within the gate window
+        // must result in only one network refresh.
+        var handler = new CountingHttpHandler(SampleJwks);
+        var factory = new Mock<IHttpClientFactory>();
+        factory.Setup(f => f.CreateClient("OidcPlugin"))
+               .Returns(new HttpClient(handler));
+        var cache = new JwksCache(factory.Object, NullLogger<JwksCache>.Instance, TimeSpan.FromMinutes(5));
+
+        await cache.RefreshAsync("http://idp/jwks");
+        await cache.RefreshAsync("http://idp/jwks");
+
+        Assert.Equal(1, handler.RequestCount);
+    }
+
+    [Fact]
+    public async Task RefreshAsync_AfterGate_FetchesAgain()
+    {
+        var handler = new CountingHttpHandler(SampleJwks);
+        var factory = new Mock<IHttpClientFactory>();
+        factory.Setup(f => f.CreateClient("OidcPlugin"))
+               .Returns(new HttpClient(handler));
+        // Zero-length gate → every Refresh call should hit the wire.
+        var cache = new JwksCache(factory.Object, NullLogger<JwksCache>.Instance, TimeSpan.Zero);
+
+        await cache.RefreshAsync("http://idp/jwks");
+        await Task.Delay(20);
+        await cache.RefreshAsync("http://idp/jwks");
+
+        Assert.Equal(2, handler.RequestCount);
+    }
+
+    [Fact]
     public async Task GetKeysAsync_ConcurrentCalls_FetchOnce()
     {
         var handler = new CountingHttpHandler(SampleJwks, delayMs: 50);

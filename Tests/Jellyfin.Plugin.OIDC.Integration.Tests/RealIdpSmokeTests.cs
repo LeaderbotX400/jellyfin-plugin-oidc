@@ -75,7 +75,8 @@ public sealed class RealIdpSmokeTests
         // 3. Resolve signing keys via our plugin code (detects HS256 vs RS256 from token header)
         var jwksCache = new JwksCache(new FakeHttpClientFactory(), NullLogger<JwksCache>.Instance);
         SecurityKey[] keys = await SigningKeyResolver.ResolveAsync(
-            tokenResponse.IdentityToken!, clientSecret, disco.JwksUri, jwksCache);
+            tokenResponse.IdentityToken!, clientSecret, disco.JwksUri, jwksCache,
+            new[] { "RS256", "RS384", "RS512", "ES256", "ES384", "ES512", "PS256", "PS384", "PS512", "HS256" });
         Assert.NotEmpty(keys);
 
         // 4. Validate the ID token signature + claims using the same validation params as the plugin
