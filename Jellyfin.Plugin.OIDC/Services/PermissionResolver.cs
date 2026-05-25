@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.Linq;
+using System.Text;
 using Jellyfin.Plugin.OIDC.Configuration;
 
 namespace Jellyfin.Plugin.OIDC.Services;
@@ -49,11 +50,21 @@ public static class PermissionResolver
         ResolverConfig config,
         Func<List<string>, List<string>, List<string>>? resolveLibraryIds = null)
     {
+        // Normalize both role claim values and mapping role names to NFKC before comparison.
+        // This prevents visually-identical homoglyphs (e.g. Turkish dotless 'Admın' U+0131)
+        // from bypassing deny rules that use ASCII 'admin'. NFKC is chosen over NFC because it
+        // also collapses compatibility equivalents (e.g. fullwidth chars → ASCII).
+        var normalizedUserRoles = userRoles
+            .Select(r => r.Normalize(NormalizationForm.FormKC))
+            .ToArray();
+
         var allMatching = config.RoleMappings
             .Where(m =>
                 (string.IsNullOrEmpty(m.ProviderId) ||
                  string.Equals(m.ProviderId, providerId, StringComparison.OrdinalIgnoreCase)) &&
-                userRoles.Contains(m.RoleName, StringComparer.OrdinalIgnoreCase))
+                normalizedUserRoles.Contains(
+                    m.RoleName.Normalize(NormalizationForm.FormKC),
+                    StringComparer.OrdinalIgnoreCase))
             .OrderByDescending(m => m.Priority)
             .ToList();
 

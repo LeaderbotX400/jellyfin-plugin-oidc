@@ -465,6 +465,8 @@ export default function (view) {
             view.querySelector('#rbacBehavior').value = cfg.RbacBehavior || 'EntitlementsAuthoritative';
             var alEl = view.querySelector('#allowLastAdminDemotion');
             if (alEl) alEl.checked = cfg.AllowLastAdminDemotion === true;
+            var vclEl = view.querySelector('#verboseClaimLogging');
+            if (vclEl) vclEl.checked = cfg.VerboseClaimLogging === true;
             Dashboard.hideLoadingMsg();
         }).catch(function (err) {
             Dashboard.hideLoadingMsg();
@@ -561,6 +563,7 @@ export default function (view) {
         cfg.AutoCreateUsers = gchk(view, 'autoCreateUsers');
         cfg.RbacBehavior = view.querySelector('#rbacBehavior').value || 'EntitlementsAuthoritative';
         cfg.AllowLastAdminDemotion = gchk(view, 'allowLastAdminDemotion');
+        cfg.VerboseClaimLogging = gchk(view, 'verboseClaimLogging');
 
         // Client-side provider id check — must match server regex ^[A-Za-z0-9_-]{1,64}$.
         // The server's UpdateConfiguration validates again as the source of truth; this just

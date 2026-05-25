@@ -222,4 +222,19 @@ public class EntitlementParserTests
         Assert.True(set.EnableRemoteControlOfOtherUsers);
         Assert.True(set.EnablePublicSharing);
     }
+
+    [Fact]
+    public void Parse_NonAsciiPrefix_DoesNotThrow_AndProducesNoFalsePositives()
+    {
+        // EntitlementParser's prefix-stripping uses char-index slicing after the prefix.
+        // The prefix MUST be ASCII-only (as documented). Non-ASCII prefixes are not a
+        // supported configuration. This test documents that no exception is thrown and
+        // that ASCII entitlements do NOT match a non-ASCII prefix.
+        //
+        // "café:" is a 5-char, non-ASCII prefix containing é (U+00E9).
+        var set = EntitlementParser.Parse(new[] { "jellyfin:admin" }, "café:");
+        // ASCII "jellyfin:admin" must not match non-ASCII prefix "café:" — no false positives.
+        Assert.False(set.IsAdmin);
+        Assert.False(set.HasAny);
+    }
 }

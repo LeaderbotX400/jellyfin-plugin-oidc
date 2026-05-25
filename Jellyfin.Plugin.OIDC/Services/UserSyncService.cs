@@ -121,16 +121,16 @@ public class UserSyncService
                 if (!autoLinkByEmail)
                 {
                     _logger.LogWarning(
-                        "Refusing OIDC auto-bind: local user '{Username}' already exists (provider={Provider}, sub={Sub})",
-                        username, providerId, sub);
+                        "Refusing OIDC auto-bind: local user '{Username}' already exists (provider={Provider}, sub={SubRedacted})",
+                        username, providerId, LogRedaction.RedactSub(sub));
                     throw new OidcUsernameCollisionException(username);
                 }
 
                 if (!emailVerified)
                 {
                     _logger.LogWarning(
-                        "Refusing OIDC auto-link by email: email_verified is not true (provider={Provider}, sub={Sub})",
-                        providerId, sub);
+                        "Refusing OIDC auto-link by email: email_verified is not true (provider={Provider}, sub={SubRedacted})",
+                        providerId, LogRedaction.RedactSub(sub));
                     throw new OidcUsernameCollisionException(username);
                 }
 
@@ -138,8 +138,8 @@ public class UserSyncService
                     !string.Equals(email, existing.Username, StringComparison.OrdinalIgnoreCase))
                 {
                     _logger.LogWarning(
-                        "Refusing OIDC auto-link by email: token email '{TokenEmail}' does not match existing username '{ExistingName}'",
-                        email, existing.Username);
+                        "Refusing OIDC auto-link by email: token email domain '{EmailDomain}' does not match existing username",
+                        LogRedaction.RedactEmail(email));
                     throw new OidcUsernameCollisionException(username);
                 }
 
@@ -159,8 +159,8 @@ public class UserSyncService
                 user = existing;
                 await _userStore.LinkAsync(user.Id, sub, providerId).ConfigureAwait(false);
                 _logger.LogInformation(
-                    "Auto-linked OIDC sub={Sub} to existing user '{Username}' via verified email match",
-                    sub, username);
+                    "Auto-linked OIDC sub={SubRedacted} to existing user '{Username}' via verified email match",
+                    LogRedaction.RedactSub(sub), username);
 
                 if (provider?.EnforceSsoOnLink == true)
                 {

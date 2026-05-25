@@ -54,9 +54,10 @@ public class RbacService
 
         if (preview.MatchedGrantMappings.Length == 0 && !preview.ParsedEntitlements.Any())
         {
+            var verbose = _configProvider.GetConfiguration().VerboseClaimLogging;
             _logger.LogInformation(
-                "No role mappings or entitlements matched for user {Username} (roles: [{Roles}])",
-                user.Username, string.Join(", ", userRoles));
+                "No role mappings or entitlements matched for user {Username} (roleCount={RoleCount})",
+                user.Username, LogRedaction.RedactRoles(userRoles, verbose));
             return;
         }
 
@@ -97,6 +98,8 @@ public class RbacService
             null => "unchanged",
         };
 
+        // Matched mapping names (RoleNames from config, not claim values) are safe to log at Info.
+        // Raw role claim values from the IdP are NOT logged here (TASK-18).
         _logger.LogInformation(
             "Applied RBAC for user {Username}: admin={IsAdmin}, libraries={Libraries}, " +
             "grants=[{Grants}], denies=[{Denies}], entitlements={EntCount}",
@@ -107,11 +110,12 @@ public class RbacService
             string.Join(", ", preview.MatchedDenyMappings),
             entitlements.Length);
 
+        // Activity log: user-friendly summary, no raw claim contents (other admins read this).
         await LogActivityAsync(
             "OIDC RBAC permissions updated",
             "OidcPermissionsChanged",
             userId,
-            $"Roles: {string.Join(", ", userRoles)}. Admin: {adminStr}.",
+            $"Admin: {adminStr}. Matched grants: {preview.MatchedGrantMappings.Length}, denies: {preview.MatchedDenyMappings.Length}.",
             Microsoft.Extensions.Logging.LogLevel.Information).ConfigureAwait(false);
     }
 
@@ -282,7 +286,7 @@ public class RbacService
         }
         catch (Exception ex)
         {
-            _logger.LogDebug(ex, "Failed to write activity log entry '{Name}'", name);
+            _logger.LogWarning(ex, "Failed to write activity log entry '{Name}'", name);
         }
     }
 }

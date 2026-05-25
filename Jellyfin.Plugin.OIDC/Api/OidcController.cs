@@ -10,6 +10,7 @@ using System.Threading;
 using System.Threading.Tasks;
 using IdentityModel;
 using IdentityModel.Client;
+using Jellyfin.Plugin.OIDC;
 using Jellyfin.Plugin.OIDC.Configuration;
 using Jellyfin.Plugin.OIDC.Services;
 using MediaBrowser.Common.Api;
@@ -39,6 +40,7 @@ public class OidcController : ControllerBase
     private readonly OidcUserStore _userStore;
     private readonly IUserManager _userManager;
     private readonly IPluginConfigProvider _configProvider;
+    private readonly AuthorizationCodeCache _codeCache;
     private readonly ILogger<OidcController> _logger;
 
     public OidcController(
@@ -52,6 +54,7 @@ public class OidcController : ControllerBase
         OidcUserStore userStore,
         IUserManager userManager,
         IPluginConfigProvider configProvider,
+        AuthorizationCodeCache codeCache,
         ILogger<OidcController> logger)
     {
         _stateManager = stateManager;
@@ -64,6 +67,7 @@ public class OidcController : ControllerBase
         _userStore = userStore;
         _userManager = userManager;
         _configProvider = configProvider;
+        _codeCache = codeCache;
         _logger = logger;
     }
 
@@ -134,7 +138,11 @@ public class OidcController : ControllerBase
         {
             var error = HttpContext.Request.Query["error"].FirstOrDefault();
             var errorDesc = HttpContext.Request.Query["error_description"].FirstOrDefault();
-            _logger.LogWarning("OIDC callback error: {Error} - {Description}", error, errorDesc);
+            // Sanitize IdP-supplied strings before logging to prevent log injection.
+            _logger.LogWarning(
+                "OIDC callback error: {Error} - {Description}",
+                LogRedaction.Sanitize(error),
+                LogRedaction.Sanitize(errorDesc));
             return BadRequest($"Authentication failed: {error ?? "missing code or state"}");
         }
 
@@ -147,6 +155,15 @@ public class OidcController : ControllerBase
         if (!string.Equals(oidcState.ProviderId, providerId, StringComparison.OrdinalIgnoreCase))
         {
             return BadRequest("Provider mismatch");
+        }
+
+        // Defense-in-depth: one-time-use code guard. The IdP's token endpoint already
+        // enforces this, but we add an in-process check to catch replays before any
+        // token exchange network call is made.
+        if (!_codeCache.TryConsume(code, providerId))
+        {
+            _logger.LogWarning("OIDC callback rejected: authorization code already used for provider {Provider}", providerId);
+            return BadRequest("Authorization code has already been used");
         }
 
         // Verify the per-request CSRF cookie that /Start set. Missing or mismatched cookie
@@ -245,10 +262,13 @@ public class OidcController : ControllerBase
             return BadRequest("Token validation failed");
         }
 
+        // Nonce MUST be present AND match — no short-circuit for empty nonce.
+        // OidcState.Nonce is required (always set in /Start and /LinkStart), so this
+        // guard catches both a missing nonce claim and a value mismatch.
         var nonceClaim = idToken.Claims.FirstOrDefault(c => c.Type == "nonce")?.Value;
-        if (!string.IsNullOrEmpty(oidcState.Nonce) && nonceClaim != oidcState.Nonce)
+        if (string.IsNullOrEmpty(nonceClaim) || nonceClaim != oidcState.Nonce)
         {
-            _logger.LogWarning("Nonce mismatch in OIDC callback");
+            _logger.LogWarning("Nonce missing or mismatch in OIDC callback for provider {Provider}", providerId);
             return BadRequest("Token validation failed: nonce mismatch");
         }
 
@@ -299,18 +319,40 @@ public class OidcController : ControllerBase
             ? ClaimParser.ExtractRoles(idToken, provider.EntitlementClaim)
             : Array.Empty<string>();
 
+        var config = _configProvider.GetConfiguration();
+        var verbose = config.VerboseClaimLogging;
+
         var transformCount = provider.RoleTransforms?.Count ?? 0;
         if (transformCount > 0 && !rawRoles.SequenceEqual(roles, StringComparer.Ordinal))
         {
+            // Info: counts only. Debug adds sub-hash. Verbose: full values.
             _logger.LogInformation(
-                "OIDC auth successful: user={Username}, roles=[{Roles}] (raw=[{RawRoles}], transforms={TransformCount}), entitlements={EntitlementCount}, provider={Provider}",
-                username, string.Join(", ", roles), string.Join(", ", rawRoles), transformCount, entitlements.Length, providerId);
+                "OIDC auth successful: user={Username}, roles={RoleCount} (transforms={TransformCount}), entitlements={EntitlementCount}, provider={Provider}",
+                username, LogRedaction.RedactRoles(roles, verbose), transformCount, entitlements.Length, providerId);
+            if (verbose)
+            {
+                _logger.LogDebug(
+                    "OIDC auth (verbose): sub={Sub}, roles={Roles}, rawRoles={RawRoles}, provider={Provider}",
+                    LogRedaction.RedactSub(sub), LogRedaction.RedactRoles(roles, true), LogRedaction.RedactRoles(rawRoles, true), providerId);
+            }
+            else
+            {
+                _logger.LogDebug(
+                    "OIDC auth: sub={SubRedacted}, roles={RoleCount}, rawRoleCount={RawRoleCount}, provider={Provider}",
+                    LogRedaction.RedactSub(sub), LogRedaction.RedactRoles(roles), LogRedaction.RedactRoles(rawRoles), providerId);
+            }
         }
         else
         {
             _logger.LogInformation(
-                "OIDC auth successful: user={Username}, roles=[{Roles}], entitlements={EntitlementCount}, provider={Provider}",
-                username, string.Join(", ", roles), entitlements.Length, providerId);
+                "OIDC auth successful: user={Username}, roles={RoleCount}, entitlements={EntitlementCount}, provider={Provider}",
+                username, LogRedaction.RedactRoles(roles, verbose), entitlements.Length, providerId);
+            if (!verbose)
+            {
+                _logger.LogDebug(
+                    "OIDC auth: sub={SubRedacted}, roles={RoleCount}, provider={Provider}",
+                    LogRedaction.RedactSub(sub), LogRedaction.RedactRoles(roles), providerId);
+            }
         }
 
         var sessionToken = _stateManager.StoreAuthorizedSession(new AuthorizedSession
@@ -606,12 +648,29 @@ public class OidcController : ControllerBase
 
     private static string CreateCodeChallenge(string codeVerifier)
     {
+        // RFC 7636 §4.2: BASE64URL(SHA256(ASCII(code_verifier))).
+        // CryptoRandom.CreateUniqueId only produces ASCII-safe characters, so UTF-8
+        // and ASCII are equivalent here — but UTF-8 is spec-correct for the general case.
         using var sha256 = SHA256.Create();
-        var hash = sha256.ComputeHash(Encoding.ASCII.GetBytes(codeVerifier));
+        var hash = sha256.ComputeHash(Encoding.UTF8.GetBytes(codeVerifier));
         return Base64UrlEncoder.Encode(hash);
     }
 
-    private static Parameters? ParseAdditionalParameters(string? raw)
+    // Keys that are owned by the OIDC protocol layer and must not be overridable via
+    // AdditionalParameters — doing so could bypass security controls (e.g. redirecting to
+    // an attacker redirect_uri, leaking the client_secret, or swapping the code_challenge).
+    private static readonly HashSet<string> ReservedAuthorizeKeys = new(StringComparer.OrdinalIgnoreCase)
+    {
+        "redirect_uri", "client_id", "client_secret", "state", "nonce",
+        "code_challenge", "code_challenge_method", "response_type", "scope"
+    };
+
+    /// <summary>
+    /// Parses the provider's <c>AdditionalParameters</c> field into a <see cref="Parameters"/> map.
+    /// Throws <see cref="InvalidOperationException"/> if any key is reserved by the OIDC protocol.
+    /// This is also enforced at config-save time via <see cref="ProviderConfigValidator"/>.
+    /// </summary>
+    internal static Parameters? ParseAdditionalParameters(string? raw)
     {
         if (string.IsNullOrWhiteSpace(raw))
         {
@@ -623,7 +682,18 @@ public class OidcController : ControllerBase
             .Where(p => p.Length == 2)
             .Select(p => new KeyValuePair<string, string>(
                 Uri.UnescapeDataString(p[0].Trim()),
-                Uri.UnescapeDataString(p[1].Trim())));
+                Uri.UnescapeDataString(p[1].Trim())))
+            .ToList();
+
+        foreach (var kv in pairs)
+        {
+            if (ReservedAuthorizeKeys.Contains(kv.Key))
+            {
+                throw new InvalidOperationException(
+                    $"AdditionalParameters contains reserved key '{kv.Key}'. " +
+                    "This key is controlled by the OIDC protocol and cannot be overridden.");
+            }
+        }
 
         return new Parameters(pairs);
     }
@@ -711,6 +781,11 @@ public class OidcController : ControllerBase
         // characters somehow bypassed the regex at the config layer.
         var encodedToken = JsonSerializer.Serialize(sessionToken);
         var encodedProvider = JsonSerializer.Serialize(providerId);
+        // Use the actual plugin version rather than a hardcoded string so Jellyfin's
+        // session table shows the real plugin version. Falls back to "0.0.0" when
+        // running outside the Jellyfin host (e.g. unit tests).
+        var appVersion = OidcPlugin.Instance?.Version?.ToString() ?? "0.0.0";
+        var encodedVersion = JsonSerializer.Serialize(appVersion);
         return $$"""
         <!DOCTYPE html>
         <html>
@@ -734,7 +809,7 @@ public class OidcController : ControllerBase
                     DeviceId: deviceId,
                     DeviceName: navigator.userAgent.substring(0, 50),
                     App: 'Jellyfin Web',
-                    AppVersion: '10.11.0'
+                    AppVersion: {{encodedVersion}}
                 })
             })
             .then(function(r) {
