@@ -16,6 +16,10 @@
     </PackageReference>
     <PackageReference Include="Moq" Version="4.20.72" />
     <PackageReference Include="Microsoft.Extensions.Logging.Abstractions" Version="9.0.10" />
+    <!-- Runtime assemblies needed to JIT methods that reference Jellyfin types -->
+    <PackageReference Include="Jellyfin.Controller" Version="10.11.3" />
+    <PackageReference Include="Jellyfin.Model" Version="10.11.3" />
+    <PackageReference Include="Jellyfin.Database.Implementations" Version="10.11.3" />
   </ItemGroup>
 
   <ItemGroup>

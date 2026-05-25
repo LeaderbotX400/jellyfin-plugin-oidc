@@ -7,6 +7,7 @@ using Jellyfin.Plugin.OIDC.Services;
 using MediaBrowser.Common.Api;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
+using Microsoft.Extensions.Logging;
 
 namespace Jellyfin.Plugin.OIDC.Api;
 
@@ -18,15 +19,21 @@ public class ConfigController : ControllerBase
     private readonly RbacService _rbacService;
     private readonly IHttpClientFactory _httpClientFactory;
     private readonly IPluginConfigProvider _configProvider;
+    private readonly OidcUserStore _userStore;
+    private readonly ILogger<ConfigController> _logger;
 
     public ConfigController(
         RbacService rbacService,
         IHttpClientFactory httpClientFactory,
-        IPluginConfigProvider configProvider)
+        IPluginConfigProvider configProvider,
+        OidcUserStore userStore,
+        ILogger<ConfigController> logger)
     {
         _rbacService = rbacService;
         _httpClientFactory = httpClientFactory;
         _configProvider = configProvider;
+        _userStore = userStore;
+        _logger = logger;
     }
 
     [HttpGet("Libraries")]
@@ -109,6 +116,24 @@ public class ConfigController : ControllerBase
             JwksUri = disco.JwksUri,
             ScopesSupported = supportedScopes,
             UnsupportedRequestedScopes = unsupportedScopes
+        });
+    }
+
+    /// <summary>
+    /// Resets the OIDC user store after a corruption event.
+    /// This clears all persisted user-store data and re-enables logins.
+    /// Only call this after investigating the quarantined .corrupt-* file.
+    /// Requires administrator privileges.
+    /// </summary>
+    [HttpPost("/sso/OIDC/Admin/UserStore/Reset")]
+    public ActionResult ResetUserStore()
+    {
+        _logger.LogWarning("OidcUserStore admin reset requested by {User}", User.Identity?.Name ?? "unknown");
+        _userStore.AdminReset();
+        return Ok(new
+        {
+            Message = "OIDC user store has been reset. All previous sub→user links are cleared. " +
+                      "Users will be re-linked on next login. Review the quarantined .corrupt-* file before proceeding."
         });
     }
 }
