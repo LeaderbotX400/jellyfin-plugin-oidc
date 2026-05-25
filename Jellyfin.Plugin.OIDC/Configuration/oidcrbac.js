@@ -173,14 +173,17 @@ function renderRoleMappings(view) {
                         '<span><strong>Explicit Deny</strong> — strips these permissions after grants are applied</span>' +
                     '</label>' +
                 '</div>') +
-            section('Permissions', '<div class="oidc-checkbox-row">' +
+            section('Permissions', (m.IsExplicitDeny ? '<p class="oidc-hint oidc-deny-hint">Only <strong>checked</strong> permissions will be stripped. Unchecked = this deny rule leaves the permission alone.</p>' : '') +
+                '<div class="oidc-checkbox-row">' +
                 chk('role_admin_' + idx, 'Administrator', m.IsAdmin) +
                 chk('role_alllibs_' + idx, 'All Libraries', m.EnableAllLibraries) +
                 chk('role_livetv_' + idx, 'Live TV', m.EnableLiveTv) +
                 chk('role_livetvmgmt_' + idx, 'Live TV Mgmt', m.EnableLiveTvManagement) +
-                chk('role_playback_' + idx, 'Playback', m.EnableMediaPlayback !== false) +
-                chk('role_remote_' + idx, 'Remote Access', m.EnableRemoteAccess !== false) +
-                chk('role_transcode_' + idx, 'Transcoding', m.EnableTranscoding !== false) +
+                // For deny mappings: null means "not set" → unchecked (explicit true required to strip).
+                // For allow mappings: null means "default true" → checked (backward compat).
+                chk('role_playback_' + idx, 'Playback', m.IsExplicitDeny ? m.EnableMediaPlayback === true : m.EnableMediaPlayback !== false) +
+                chk('role_remote_' + idx, 'Remote Access', m.IsExplicitDeny ? m.EnableRemoteAccess === true : m.EnableRemoteAccess !== false) +
+                chk('role_transcode_' + idx, 'Transcoding', m.IsExplicitDeny ? m.EnableTranscoding === true : m.EnableTranscoding !== false) +
                 chk('role_delete_' + idx, 'Delete Content', m.EnableContentDeletion) +
                 chk('role_collections_' + idx, 'Collections', m.EnableCollectionManagement) +
                 chk('role_subtitles_' + idx, 'Subtitles', m.EnableSubtitleManagement) +
@@ -475,12 +478,16 @@ export default function (view) {
     // Add role mapping
     view.querySelector('#btnAddRoleMapping').addEventListener('click', function () {
         if (!cfg) return;
+        // EnableMediaPlayback / EnableRemoteAccess / EnableTranscoding use null to mean:
+        //   - allow mapping: "default true" (backward compat)
+        //   - deny mapping:  "this rule doesn't touch this permission" (safe default)
+        // The UI renders null correctly per-context in renderRoleMappings.
         cfg.RoleMappings.push({
             RoleName: '', ProviderId: '', Priority: 0, IsExplicitDeny: false,
             IsAdmin: false, EnableAllLibraries: false,
             LibraryIds: [], LibraryNames: [], EnableLiveTv: false,
-            EnableLiveTvManagement: false, EnableMediaPlayback: true,
-            EnableRemoteAccess: true, EnableTranscoding: true,
+            EnableLiveTvManagement: false, EnableMediaPlayback: null,
+            EnableRemoteAccess: null, EnableTranscoding: null,
             EnableContentDeletion: false, EnableCollectionManagement: false,
             EnableSubtitleManagement: false, EnableDownload: false,
             EnableSyncplay: false, EnableSyncplayGroupCreation: false,

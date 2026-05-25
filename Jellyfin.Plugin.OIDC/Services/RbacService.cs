@@ -129,11 +129,13 @@ public class RbacService
             ? EntitlementParser.Parse(entitlements, provider.EntitlementPrefix)
             : new EntitlementSet();
 
-        // OR grants, then apply deny override
+        // OR grants, then apply deny override.
+        // For the three nullable fields (Playback/Remote/Transcode): null on a grant mapping = default true;
+        // null on a deny mapping = no-op (only explicit true strips the permission).
         bool isAdmin = (merged.IsAdmin || entSet.IsAdmin) && !(deny?.IsAdmin ?? false);
-        bool playback = (merged.EnableMediaPlayback || entSet.EnableMediaPlayback) && !(deny?.EnableMediaPlayback ?? false);
-        bool remote = (merged.EnableRemoteAccess || entSet.EnableRemoteAccess) && !(deny?.EnableRemoteAccess ?? false);
-        bool transcode = (merged.EnableTranscoding || entSet.EnableTranscoding) && !(deny?.EnableTranscoding ?? false);
+        bool playback = ((merged.EnableMediaPlayback ?? true) || entSet.EnableMediaPlayback) && !(deny?.EnableMediaPlayback == true);
+        bool remote = ((merged.EnableRemoteAccess ?? true) || entSet.EnableRemoteAccess) && !(deny?.EnableRemoteAccess == true);
+        bool transcode = ((merged.EnableTranscoding ?? true) || entSet.EnableTranscoding) && !(deny?.EnableTranscoding == true);
         bool liveTv = (merged.EnableLiveTv || entSet.EnableLiveTv) && !(deny?.EnableLiveTv ?? false);
         bool liveTvMgmt = (merged.EnableLiveTvManagement || entSet.EnableLiveTvManagement) && !(deny?.EnableLiveTvManagement ?? false);
         bool delete = (merged.EnableContentDeletion || entSet.EnableContentDeletion) && !(deny?.EnableContentDeletion ?? false);
@@ -237,15 +239,24 @@ public class RbacService
 
     private static RoleMapping MergeMappings(List<RoleMapping> mappings)
     {
+        // For nullable bool? fields: OR semantics — if any mapping explicitly sets true, result is true.
+        // If all are null (no explicit value), result stays null (meaning "not specified by this mapping set").
+        static bool? MergeNullableBool(List<RoleMapping> ms, Func<RoleMapping, bool?> selector)
+        {
+            var values = ms.Select(selector).Where(v => v.HasValue).Select(v => v!.Value).ToList();
+            if (values.Count == 0) return null;
+            return values.Any(v => v);
+        }
+
         return new RoleMapping
         {
             IsAdmin = mappings.Any(m => m.IsAdmin),
             EnableAllLibraries = mappings.Any(m => m.EnableAllLibraries),
             EnableLiveTv = mappings.Any(m => m.EnableLiveTv),
             EnableLiveTvManagement = mappings.Any(m => m.EnableLiveTvManagement),
-            EnableMediaPlayback = mappings.Any(m => m.EnableMediaPlayback),
-            EnableRemoteAccess = mappings.Any(m => m.EnableRemoteAccess),
-            EnableTranscoding = mappings.Any(m => m.EnableTranscoding),
+            EnableMediaPlayback = MergeNullableBool(mappings, m => m.EnableMediaPlayback),
+            EnableRemoteAccess = MergeNullableBool(mappings, m => m.EnableRemoteAccess),
+            EnableTranscoding = MergeNullableBool(mappings, m => m.EnableTranscoding),
             EnableContentDeletion = mappings.Any(m => m.EnableContentDeletion),
             EnableCollectionManagement = mappings.Any(m => m.EnableCollectionManagement),
             EnableSubtitleManagement = mappings.Any(m => m.EnableSubtitleManagement),
