@@ -1,4 +1,5 @@
-FROM mcr.microsoft.com/dotnet/sdk:9.0 AS build
+# To bump digest: curl -sSL -D - https://mcr.microsoft.com/v2/dotnet/sdk/manifests/9.0 -H "Accept: application/vnd.docker.distribution.manifest.v2+json" | grep docker-content-digest
+FROM mcr.microsoft.com/dotnet/sdk:9.0@sha256:0d2d99c1f384a6b9c8f37aaea952937b2ffff20aa150c7eb4fdeb0a968797d31 AS build
 
 WORKDIR /src
 COPY . .
