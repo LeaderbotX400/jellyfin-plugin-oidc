@@ -444,10 +444,9 @@ function collectSamlProviders(view) {
 // ── Main ──────────────────────────────────────────────────────────────────────
 
 export default function (view) {
-    view.addEventListener('viewshow', function () {
+    function loadAndRender() {
         Dashboard.showLoadingMsg();
-
-        ApiClient.getJSON(ApiClient.getUrl('sso/OIDC/Config/Libraries')).then(function (data) {
+        return ApiClient.getJSON(ApiClient.getUrl('sso/OIDC/Config/Libraries')).then(function (data) {
             libs = data || {};
         }).catch(function () {
             libs = {};
@@ -474,7 +473,10 @@ export default function (view) {
             Dashboard.hideLoadingMsg();
             console.error('OIDC RBAC: failed to load config', err);
         });
-    });
+    }
+
+    view._oidcReload = loadAndRender;
+    view.addEventListener('viewshow', loadAndRender);
 
     // Tabs
     view.querySelectorAll('.oidc-tab').forEach(function (tab) {
@@ -613,7 +615,11 @@ export default function (view) {
                 contentType: 'application/json'
             });
         }).then(function () {
-            Dashboard.hideLoadingMsg();
+            // Re-fetch from the server so the UI reflects the persisted (and possibly
+            // normalized) values — e.g. NormalizeAuthority stripping /.well-known/...,
+            // masked secrets resetting to the sentinel, migration changes.
+            return loadAndRender();
+        }).then(function () {
             Dashboard.alert('Settings saved.');
         }).catch(function (err) {
             Dashboard.hideLoadingMsg();

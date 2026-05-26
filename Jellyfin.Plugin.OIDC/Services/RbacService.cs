@@ -87,7 +87,7 @@ public class RbacService
         bool currentlyAdmin = user.HasPermission(Jellyfin.Database.Implementations.Enums.PermissionKind.IsAdministrator);
         if (currentlyAdmin && preview.IsAdmin == false && !config.AllowLastAdminDemotion)
         {
-            int remainingAdmins = _userManager.Users
+            int remainingAdmins = JellyfinCompat.EnumerateUsers(_userManager)
                 .Count(u => u.Id != userId &&
                             u.HasPermission(Jellyfin.Database.Implementations.Enums.PermissionKind.IsAdministrator));
             if (remainingAdmins == 0)

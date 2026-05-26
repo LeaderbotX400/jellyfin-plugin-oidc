@@ -259,7 +259,7 @@ public class UserSyncService
         string ourProviderId, string oidcUsername, string providerId)
     {
         var candidates = new List<Jellyfin.Database.Implementations.Entities.User>();
-        foreach (var u in _userManager.Users)
+        foreach (var u in JellyfinCompat.EnumerateUsers(_userManager))
         {
             if (!string.Equals(u.AuthenticationProviderId, ourProviderId, StringComparison.Ordinal)) continue;
             // Already linked to some sub on this provider? Then this candidate "belongs" to that
