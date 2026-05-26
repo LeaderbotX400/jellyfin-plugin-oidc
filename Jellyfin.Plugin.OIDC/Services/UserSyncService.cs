@@ -1,5 +1,4 @@
 using System;
-using System.Security.Cryptography;
 using System.Threading.Tasks;
 using Jellyfin.Data;
 using Jellyfin.Database.Implementations.Enums;
@@ -102,14 +101,12 @@ public class UserSyncService
                 user = await _userManager.CreateUserAsync(username).ConfigureAwait(false);
                 user.AuthenticationProviderId = typeof(Auth.OidcAuthProvider).FullName!;
 
-                // Defense in depth: scramble the local password so the user can't be auth'd
-                // via the default password provider if AuthenticationProviderId ever gets
-                // cleared. The setter signature has varied across Jellyfin point releases
-                // (sometimes ChangePassword, sometimes ChangePasswordAsync, sometimes both),
-                // so we resolve via reflection and skip silently when nothing matches —
-                // AuthenticationProviderId above is the load-bearing protection.
-                var randomPassword = Convert.ToBase64String(RandomNumberGenerator.GetBytes(32));
-                await TryScrambleLocalPasswordAsync(user, randomPassword).ConfigureAwait(false);
+                // DO NOT touch the local password. Deployments commonly back local password
+                // auth with an external store (LDAP, etc.) and treat it as the backup auth
+                // method when OIDC is unavailable. AuthenticationProviderId above is the
+                // load-bearing protection: Jellyfin routes auth to the provider whose
+                // FullName matches that string, so the default password provider is bypassed
+                // for OIDC-managed users.
 
                 weCreatedThisUser = true;
                 _logger.LogInformation("Created new OIDC user: {Username}", username);
@@ -120,59 +117,30 @@ public class UserSyncService
             }
             else
             {
-                // Name collision. Auto-link only if explicitly allowed AND verified-email matches.
+                // Name collision. Two accept paths, both gated on explicit admin intent or
+                // policy opt-in; default is to refuse and force the admin to act.
                 var provider = FindProvider(providerId);
-                var autoLinkByEmail = provider?.AutoLinkByVerifiedEmail == true;
+                var ourProviderId = typeof(Auth.OidcAuthProvider).FullName!;
 
-                if (!autoLinkByEmail)
+                // Path 1 (admin pre-authorization via Jellyfin's user UI):
+                // If the existing user's Authentication Provider has been switched to "OIDC RBAC"
+                // in the standard Jellyfin admin UI, treat that as explicit consent to bind on
+                // first OIDC login. This is the migration story for converting existing local
+                // users without enabling the broader AutoLinkByVerifiedEmail policy.
+                if (string.Equals(existing.AuthenticationProviderId, ourProviderId, StringComparison.Ordinal))
                 {
-                    _logger.LogWarning(
-                        "Refusing OIDC auto-bind: local user '{Username}' already exists (provider={Provider}, sub={SubRedacted})",
-                        username, providerId, LogRedaction.RedactSub(sub));
-                    throw new OidcUsernameCollisionException(username);
+                    user = existing;
+                    await _userStore.LinkAsync(user.Id, sub, providerId).ConfigureAwait(false);
+                    _logger.LogInformation(
+                        "Auto-linked OIDC sub={SubRedacted} to existing user '{Username}' via admin-set AuthenticationProviderId",
+                        LogRedaction.RedactSub(sub), username);
                 }
-
-                if (!emailVerified)
+                else
                 {
-                    _logger.LogWarning(
-                        "Refusing OIDC auto-link by email: email_verified is not true (provider={Provider}, sub={SubRedacted})",
-                        providerId, LogRedaction.RedactSub(sub));
-                    throw new OidcUsernameCollisionException(username);
+                    // Path 2 (per-provider policy): AutoLinkByVerifiedEmail.
+                    user = await AutoLinkByVerifiedEmailAsync(
+                        existing, provider, sub, username, providerId, email ?? string.Empty, emailVerified).ConfigureAwait(false);
                 }
-
-                if (string.IsNullOrEmpty(email) ||
-                    !string.Equals(email, existing.Username, StringComparison.OrdinalIgnoreCase))
-                {
-                    _logger.LogWarning(
-                        "Refusing OIDC auto-link by email: token email domain '{EmailDomain}' does not match existing username",
-                        LogRedaction.RedactEmail(email));
-                    throw new OidcUsernameCollisionException(username);
-                }
-
-                // The existing user must never have been converted to another provider.
-                var currentProvider = existing.AuthenticationProviderId;
-                var defaultProvider = "Jellyfin.Server.Implementations.Users.DefaultAuthenticationProvider";
-                var isUnset = string.IsNullOrEmpty(currentProvider)
-                              || string.Equals(currentProvider, defaultProvider, StringComparison.Ordinal);
-                if (!isUnset)
-                {
-                    _logger.LogWarning(
-                        "Refusing OIDC auto-link by email: existing user already bound to provider '{Provider}'",
-                        currentProvider);
-                    throw new OidcUsernameCollisionException(username);
-                }
-
-                user = existing;
-                await _userStore.LinkAsync(user.Id, sub, providerId).ConfigureAwait(false);
-                _logger.LogInformation(
-                    "Auto-linked OIDC sub={SubRedacted} to existing user '{Username}' via verified email match",
-                    LogRedaction.RedactSub(sub), username);
-
-                if (provider?.EnforceSsoOnLink == true)
-                {
-                    user.AuthenticationProviderId = typeof(Auth.OidcAuthProvider).FullName!;
-                }
-                // else: leave AuthenticationProviderId alone — local password still works.
             }
         }
 
@@ -198,30 +166,69 @@ public class UserSyncService
         return user.Id;
     }
 
-    private async Task TryScrambleLocalPasswordAsync(Jellyfin.Database.Implementations.Entities.User user, string newPassword)
+    private async Task<Jellyfin.Database.Implementations.Entities.User> AutoLinkByVerifiedEmailAsync(
+        Jellyfin.Database.Implementations.Entities.User existing,
+        Configuration.OidcProviderConfig? provider,
+        string sub,
+        string username,
+        string providerId,
+        string email,
+        bool emailVerified)
     {
-        var type = _userManager.GetType();
-        foreach (var name in new[] { "ChangePasswordAsync", "ChangePassword" })
+        var autoLinkByEmail = provider?.AutoLinkByVerifiedEmail == true;
+
+        if (!autoLinkByEmail)
         {
-            var method = type.GetMethod(name, new[] { user.GetType(), typeof(string) });
-            if (method == null) continue;
-            try
-            {
-                var result = method.Invoke(_userManager, new object[] { user, newPassword });
-                if (result is Task task)
-                {
-                    await task.ConfigureAwait(false);
-                }
-                return;
-            }
-            catch (System.Reflection.TargetInvocationException ex)
-            {
-                _logger.LogDebug(ex.InnerException ?? ex, "Local-password scramble via {Method} threw; relying on AuthenticationProviderId for isolation", name);
-                return;
-            }
+            _logger.LogWarning(
+                "Refusing OIDC auto-bind: local user '{Username}' already exists (provider={Provider}, sub={SubRedacted}). " +
+                "To migrate this user, set their Authentication Provider to 'OIDC RBAC' in the Jellyfin admin UI, " +
+                "or enable AutoLinkByVerifiedEmail on the provider.",
+                username, providerId, LogRedaction.RedactSub(sub));
+            throw new OidcUsernameCollisionException(username);
         }
 
-        _logger.LogDebug("No compatible ChangePassword method on IUserManager; relying on AuthenticationProviderId for isolation");
+        if (!emailVerified)
+        {
+            _logger.LogWarning(
+                "Refusing OIDC auto-link by email: email_verified is not true (provider={Provider}, sub={SubRedacted})",
+                providerId, LogRedaction.RedactSub(sub));
+            throw new OidcUsernameCollisionException(username);
+        }
+
+        if (string.IsNullOrEmpty(email)
+            || !string.Equals(email, existing.Username, StringComparison.OrdinalIgnoreCase))
+        {
+            _logger.LogWarning(
+                "Refusing OIDC auto-link by email: token email '{EmailRedacted}' does not match existing username",
+                LogRedaction.RedactEmail(email));
+            throw new OidcUsernameCollisionException(username);
+        }
+
+        // The existing user must never have been converted to another provider.
+        var currentProvider = existing.AuthenticationProviderId;
+        var defaultProvider = "Jellyfin.Server.Implementations.Users.DefaultAuthenticationProvider";
+        var isUnset = string.IsNullOrEmpty(currentProvider)
+                      || string.Equals(currentProvider, defaultProvider, StringComparison.Ordinal);
+        if (!isUnset)
+        {
+            _logger.LogWarning(
+                "Refusing OIDC auto-link by email: existing user already bound to provider '{Provider}'",
+                currentProvider);
+            throw new OidcUsernameCollisionException(username);
+        }
+
+        await _userStore.LinkAsync(existing.Id, sub, providerId).ConfigureAwait(false);
+        _logger.LogInformation(
+            "Auto-linked OIDC sub={SubRedacted} to existing user '{Username}' via verified email match",
+            LogRedaction.RedactSub(sub), username);
+
+        if (provider?.EnforceSsoOnLink == true)
+        {
+            existing.AuthenticationProviderId = typeof(Auth.OidcAuthProvider).FullName!;
+        }
+        // else: leave AuthenticationProviderId alone — local password still works.
+
+        return existing;
     }
 
     private Configuration.OidcProviderConfig? FindProvider(string providerId)

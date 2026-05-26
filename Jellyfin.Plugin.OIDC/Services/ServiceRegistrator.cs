@@ -1,4 +1,6 @@
+using Jellyfin.Plugin.OIDC.Auth;
 using MediaBrowser.Controller;
+using MediaBrowser.Controller.Authentication;
 using MediaBrowser.Controller.Plugins;
 using MediaBrowser.Model.Activity;
 using MediaBrowser.Model.Tasks;
@@ -11,6 +13,11 @@ public class ServiceRegistrator : IPluginServiceRegistrator
 {
     public void RegisterServices(IServiceCollection serviceCollection, IServerApplicationHost applicationHost)
     {
+        // Surface OidcAuthProvider in Jellyfin's per-user "Authentication Provider" dropdown.
+        // Without this, admins have no UI to migrate an existing local user to OIDC — the only
+        // path is OIDC login + auto-link, which TASK-04 blocks by default for safety.
+        serviceCollection.AddSingleton<IAuthenticationProvider, OidcAuthProvider>();
+
         serviceCollection.AddSingleton<IPluginConfigProvider, JellyfinPluginConfigProvider>();
         serviceCollection.AddSingleton<StateManager>();
         serviceCollection.AddHostedService(sp => sp.GetRequiredService<StateManager>());
