@@ -18,27 +18,49 @@ function gchk(view, id) {
     return el ? el.checked : false;
 }
 
-function fld(label, type, id, value, placeholder, full) {
-    var isColor = type === 'color';
-    var attr = isColor ? '' : ' is="emby-input"';
-    return '<div class="oidc-field' + (full ? ' full' : '') + (isColor ? ' oidc-field-color' : '') + '">' +
+// ── Render helpers — emit Jellyfin's stock dashboard markup ───────────────────
+
+// Standard text/number/password input — Jellyfin's <input is="emby-input">
+// renders the label itself via the label="" attribute.
+function fld(label, type, id, value, placeholder, fullwidth) {
+    return '<div class="inputContainer' + (fullwidth ? ' oidc-grid-full' : '') + '">' +
+        '<input is="emby-input" type="' + type + '" id="' + id + '"' +
+        ' label="' + esc(label) + '"' +
+        ' value="' + esc(String(value == null ? '' : value)) + '"' +
+        (placeholder ? ' placeholder="' + esc(placeholder) + '"' : '') +
+        ' />' +
+        '</div>';
+}
+
+// Color input — native <input type="color">, can't use emby-input.
+function fldColor(label, id, value) {
+    return '<div class="inputContainer">' +
         '<label class="inputLabel inputLabelUnfocused" for="' + id + '">' + esc(label) + '</label>' +
-        '<input type="' + type + '" id="' + id + '"' + attr + ' value="' + esc(String(value || '')) + '"' +
-        (placeholder ? ' placeholder="' + esc(placeholder) + '"' : '') + ' />' +
+        '<div><input class="oidc-color-input" type="color" id="' + id + '" value="' + esc(value || '#4285F4') + '" /></div>' +
+        '</div>';
+}
+
+// Description-bearing input: same as fld() with a fieldDescription appended.
+function fldDesc(label, type, id, value, desc, fullwidth) {
+    return '<div class="inputContainer' + (fullwidth ? ' oidc-grid-full' : '') + '">' +
+        '<input is="emby-input" type="' + type + '" id="' + id + '"' +
+        ' label="' + esc(label) + '"' +
+        ' value="' + esc(String(value == null ? '' : value)) + '" />' +
+        '<div class="fieldDescription">' + esc(desc) + '</div>' +
         '</div>';
 }
 
 function chk(id, label, checked) {
-    return '<label class="emby-checkbox-label">' +
+    return '<div class="checkboxContainer">' +
+        '<label>' +
         '<input is="emby-checkbox" type="checkbox" id="' + id + '"' + (checked ? ' checked' : '') + ' />' +
         '<span>' + esc(label) + '</span>' +
-        '</label>';
+        '</label>' +
+        '</div>';
 }
 
-function section(title, body) {
-    return '<div class="oidc-section">' +
-        (title ? '<div class="oidc-section-title">' + esc(title) + '</div>' : '') +
-        body + '</div>';
+function subsection(title, body) {
+    return (title ? '<div class="oidc-subsection-title">' + esc(title) + '</div>' : '') + body;
 }
 
 function addLibChip(container, libId) {
@@ -51,17 +73,24 @@ function addLibChip(container, libId) {
 
 // ── Transform rows ────────────────────────────────────────────────────────────
 
+function transformRowHtml(from, to) {
+    return '<div class="inputContainer">' +
+        '<input is="emby-input" type="text" class="xform-from" placeholder="From (exact)" value="' + esc(from || '') + '" />' +
+        '</div>' +
+        '<span class="oidc-xform-arrow material-icons" aria-hidden="true">arrow_forward</span>' +
+        '<div class="inputContainer">' +
+        '<input is="emby-input" type="text" class="xform-to" placeholder="To (empty=drop)" value="' + esc(to || '') + '" />' +
+        '</div>' +
+        '<button type="button" is="emby-button" class="oidc-btn-danger" data-action="remove-xform" title="Remove">' +
+        '<span class="material-icons" aria-hidden="true">close</span></button>';
+}
+
 function renderTransformRows(container, transforms) {
     container.innerHTML = '';
-    (transforms || []).forEach(function (t, i) {
+    (transforms || []).forEach(function (t) {
         var row = document.createElement('div');
         row.className = 'oidc-transform-row';
-        row.innerHTML =
-            '<input is="emby-input" type="text" class="xform-from" placeholder="From (exact)" value="' + esc(t.FromValue || '') + '" />' +
-            '<span class="oidc-xform-arrow">→</span>' +
-            '<input is="emby-input" type="text" class="xform-to" placeholder="To (empty=drop)" value="' + esc(t.ToValue || '') + '" />' +
-            '<button type="button" class="oidc-xform-remove" title="Remove">&times;</button>';
-        row.querySelector('button').addEventListener('click', function () { row.remove(); });
+        row.innerHTML = transformRowHtml(t.FromValue, t.ToValue);
         container.appendChild(row);
     });
 }
@@ -80,63 +109,71 @@ function collectTransforms(container) {
 
 // ── Provider cards ────────────────────────────────────────────────────────────
 
+function statusPill(enabled) {
+    var cls = enabled ? 'oidc-status-on' : 'oidc-status-off';
+    var lbl = enabled ? 'Enabled' : 'Disabled';
+    return '<span class="oidc-status ' + cls + '"><span class="oidc-status-dot"></span>' + lbl + '</span>';
+}
+
 function renderProviders(view) {
     var container = view.querySelector('#providerList');
     container.innerHTML = '';
     cfg.Providers.forEach(function (p, idx) {
         var card = document.createElement('div');
-        card.className = 'oidc-card';
-        var statusClass = p.Enabled !== false ? 'oidc-status-on' : 'oidc-status-off';
-        var statusLabel = p.Enabled !== false ? 'Enabled' : 'Disabled';
+        card.className = 'oidc-card listItem';
         card.innerHTML =
             '<div class="oidc-card-header">' +
                 '<div class="oidc-card-title">' +
-                    '<span class="oidc-card-name">' + esc(p.DisplayName || 'New Provider') + '</span>' +
+                    '<span>' + esc(p.DisplayName || 'New Provider') + '</span>' +
                     (p.ProviderId ? '<span class="oidc-chip">' + esc(p.ProviderId) + '</span>' : '') +
                 '</div>' +
-                '<span class="oidc-status ' + statusClass + '"><span class="oidc-status-dot"></span>' + statusLabel + '</span>' +
+                statusPill(p.Enabled !== false) +
             '</div>' +
-            section('Identity', '<div class="oidc-grid">' +
-                fld('Provider ID', 'text', 'prov_id_' + idx, p.ProviderId, 'Unique identifier (e.g. keycloak)') +
-                fld('Display Name', 'text', 'prov_name_' + idx, p.DisplayName, 'Shown on login button') +
-                fld('Authority URL', 'text', 'prov_authority_' + idx, p.Authority, 'https://idp.example.com/realms/myrealm', true) +
-                fld('Client ID', 'text', 'prov_clientid_' + idx, p.ClientId, '') +
-                fld('Client Secret', 'password', 'prov_secret_' + idx, p.ClientSecret,
-                    p.ClientSecret === '__UNCHANGED__' ? 'leave unchanged to keep existing secret' : '') +
-                fld('Scopes', 'text', 'prov_scopes_' + idx, p.Scopes || 'openid profile email', '', true) +
-                '</div>') +
-            section('Claims', '<div class="oidc-grid">' +
-                fld('Role Claim Path', 'text', 'prov_roleclaim_' + idx, p.RoleClaim || 'groups', 'e.g. groups or realm_access.roles') +
-                fld('Username Claim', 'text', 'prov_userclaim_' + idx, p.UsernameClaim || 'preferred_username', '') +
-                fld('Display Name Claim', 'text', 'prov_displayclaim_' + idx, p.DisplayNameClaim || 'name', '') +
-                fld('Email Claim', 'text', 'prov_emailclaim_' + idx, p.EmailClaim || 'email', 'Used by Auto-link by verified email') +
-                fld('Entitlement Claim', 'text', 'prov_entclaim_' + idx, p.EntitlementClaim || 'entitlements', 'Authentik-style entitlements') +
-                fld('Entitlement Prefix', 'text', 'prov_entprefix_' + idx, p.EntitlementPrefix || 'jellyfin:', '') +
-                '</div>') +
-            section('Display', '<div class="oidc-grid">' +
-                fld('Button Color', 'color', 'prov_color_' + idx, p.ButtonColor || '#4285F4', '') +
-                fld('Additional Params', 'text', 'prov_params_' + idx, p.AdditionalParameters || '', 'key=val&key2=val2') +
-                '</div>') +
-            section('Options', '<div class="oidc-checkbox-row">' +
+            subsection('Identity',
+                '<div class="oidc-grid">' +
+                    fld('Provider ID', 'text', 'prov_id_' + idx, p.ProviderId, 'Unique identifier (e.g. keycloak)') +
+                    fld('Display Name', 'text', 'prov_name_' + idx, p.DisplayName, 'Shown on login button') +
+                    fld('Authority URL', 'text', 'prov_authority_' + idx, p.Authority, 'https://idp.example.com/realms/myrealm', true) +
+                    fld('Client ID', 'text', 'prov_clientid_' + idx, p.ClientId) +
+                    fld('Client Secret', 'password', 'prov_secret_' + idx, p.ClientSecret,
+                        p.ClientSecret === '__UNCHANGED__' ? 'leave unchanged to keep existing secret' : '') +
+                    fld('Scopes', 'text', 'prov_scopes_' + idx, p.Scopes || 'openid profile email', '', true) +
+                '</div>'
+            ) +
+            subsection('Claims',
+                '<div class="oidc-grid">' +
+                    fld('Role Claim Path', 'text', 'prov_roleclaim_' + idx, p.RoleClaim || 'groups', 'e.g. groups or realm_access.roles') +
+                    fld('Username Claim', 'text', 'prov_userclaim_' + idx, p.UsernameClaim || 'preferred_username') +
+                    fld('Display Name Claim', 'text', 'prov_displayclaim_' + idx, p.DisplayNameClaim || 'name') +
+                    fld('Email Claim', 'text', 'prov_emailclaim_' + idx, p.EmailClaim || 'email', 'Used by Auto-link by verified email') +
+                    fld('Entitlement Claim', 'text', 'prov_entclaim_' + idx, p.EntitlementClaim || 'entitlements', 'Authentik-style entitlements') +
+                    fld('Entitlement Prefix', 'text', 'prov_entprefix_' + idx, p.EntitlementPrefix || 'jellyfin:') +
+                '</div>'
+            ) +
+            subsection('Display',
+                '<div class="oidc-grid">' +
+                    fldColor('Button Color', 'prov_color_' + idx, p.ButtonColor || '#4285F4') +
+                    fld('Additional Params', 'text', 'prov_params_' + idx, p.AdditionalParameters || '', 'key=val&key2=val2') +
+                '</div>'
+            ) +
+            subsection('Options',
                 chk('prov_enabled_' + idx, 'Enabled', p.Enabled !== false) +
                 chk('prov_entitlements_' + idx, 'Enable entitlements', p.EnableEntitlements !== false) +
                 chk('prov_emailverified_' + idx, 'Require email_verified claim', p.RequireEmailVerified) +
                 chk('prov_autolinkemail_' + idx, 'Auto-link to local user by verified email (DANGEROUS — see docs)', p.AutoLinkByVerifiedEmail) +
-                chk('prov_enforcessolink_' + idx, 'Enforce SSO-only on auto-link (disables local password)', p.EnforceSsoOnLink) +
-                '</div>') +
-            section('Security', '<div class="oidc-grid">' +
-                fld('Allowed Signing Algorithms', 'text', 'prov_algs_' + idx,
+                chk('prov_enforcessolink_' + idx, 'Enforce SSO-only on auto-link (disables local password)', p.EnforceSsoOnLink)
+            ) +
+            subsection('Security',
+                fldDesc('Allowed Signing Algorithms', 'text', 'prov_algs_' + idx,
                     (p.AllowedSigningAlgorithms || ['RS256','RS384','RS512','ES256','ES384','ES512','PS256','PS384','PS512']).join(','),
                     'Comma-separated. Adding HS256/HS384/HS512 is DANGEROUS (relies on client_secret strength).', true) +
-                '</div>' +
-                '<div class="oidc-checkbox-row oidc-checkbox-row-wide">' +
                 chk('prov_allowinsecure_' + idx, 'Allow insecure authority (dev/test only)', p.AllowInsecureAuthority) +
-                '</div>' +
-                '<p class="oidc-hint"><strong>DANGER:</strong> HTTPS is required for Authority / JWKS / token endpoints. The "Allow insecure" toggle relaxes this for localhost only and must never be enabled in production.</p>') +
-            '<details class="oidc-details"><summary>Role Transforms <span class="oidc-count">(' + (p.RoleTransforms || []).length + ')</span></summary>' +
+                '<div class="fieldDescription"><strong>DANGER:</strong> HTTPS is required for Authority / JWKS / token endpoints. The "Allow insecure" toggle relaxes this for localhost only and must never be enabled in production.</div>'
+            ) +
+            '<details class="verticalSection"><summary>Role Transforms (' + (p.RoleTransforms || []).length + ')</summary>' +
                 '<div class="oidc-transform-list" id="prov_transforms_' + idx + '"></div>' +
-                '<button type="button" is="emby-button" class="oidc-btn-add" data-action="add-transform" data-idx="' + idx + '"><span>+ Add Transform</span></button>' +
-                '<p class="oidc-hint">Map raw IdP role values before matching. Empty "To" drops the value.</p>' +
+                '<button type="button" is="emby-button" data-action="add-transform" data-idx="' + idx + '"><span>Add Transform</span></button>' +
+                '<div class="fieldDescription">Map raw IdP role values before matching. Empty "To" drops the value.</div>' +
             '</details>' +
             '<div class="oidc-card-actions">' +
                 '<button type="button" is="emby-button" class="raised" data-action="test-provider" data-idx="' + idx + '"><span>Test Connection</span></button>' +
@@ -155,7 +192,7 @@ function renderRoleMappings(view) {
     container.innerHTML = '';
     cfg.RoleMappings.forEach(function (m, idx) {
         var card = document.createElement('div');
-        card.className = 'oidc-card' + (m.IsExplicitDeny ? ' oidc-card-deny' : '');
+        card.className = 'oidc-card listItem' + (m.IsExplicitDeny ? ' oidc-card-deny' : '');
         var libOpts = Object.keys(libs).map(function (id) {
             return '<option value="' + esc(id) + '">' + esc(libs[id]) + '</option>';
         }).join('');
@@ -167,27 +204,32 @@ function renderRoleMappings(view) {
                 return f || name;
             })
         );
-        var denyBadge = m.IsExplicitDeny ? '<span class="oidc-badge-deny">DENY</span>' : '<span class="oidc-badge-grant">GRANT</span>';
+        var badge = m.IsExplicitDeny
+            ? '<span class="oidc-badge oidc-badge-deny">DENY</span>'
+            : '<span class="oidc-badge oidc-badge-grant">GRANT</span>';
         card.innerHTML =
             '<div class="oidc-card-header">' +
                 '<div class="oidc-card-title">' +
-                    '<span class="oidc-card-name">' + esc(m.RoleName || 'New Role') + '</span>' +
-                    denyBadge +
+                    '<span>' + esc(m.RoleName || 'New Role') + '</span>' +
+                    badge +
                 '</div>' +
             '</div>' +
-            section('Match', '<div class="oidc-grid">' +
-                fld('Role Name', 'text', 'role_name_' + idx, m.RoleName, 'Must match IdP role claim value') +
-                fld('Priority', 'number', 'role_priority_' + idx, m.Priority || 0, 'Higher = takes precedence') +
-                fld('Provider Scope', 'text', 'role_provider_' + idx, m.ProviderId || '', 'Empty = all providers', true) +
+            subsection('Match',
+                '<div class="oidc-grid">' +
+                    fld('Role Name', 'text', 'role_name_' + idx, m.RoleName, 'Must match IdP role claim value') +
+                    fld('Priority', 'number', 'role_priority_' + idx, m.Priority || 0, 'Higher = takes precedence') +
+                    fld('Provider Scope', 'text', 'role_provider_' + idx, m.ProviderId || '', 'Empty = all providers', true) +
                 '</div>' +
-                '<div class="oidc-deny-toggle">' +
-                    '<label class="emby-checkbox-label">' +
+                '<div class="oidc-deny-toggle checkboxContainer">' +
+                    '<label>' +
                         '<input is="emby-checkbox" type="checkbox" id="role_deny_' + idx + '"' + (m.IsExplicitDeny ? ' checked' : '') + ' />' +
                         '<span><strong>Explicit Deny</strong> — strips these permissions after grants are applied</span>' +
                     '</label>' +
-                '</div>') +
-            section('Permissions', (m.IsExplicitDeny ? '<p class="oidc-hint oidc-deny-hint">Only <strong>checked</strong> permissions will be stripped. Unchecked = this deny rule leaves the permission alone.</p>' : '') +
-                '<div class="oidc-checkbox-row">' +
+                '</div>'
+            ) +
+            subsection('Permissions',
+                (m.IsExplicitDeny ? '<div class="fieldDescription">Only <strong>checked</strong> permissions will be stripped. Unchecked = this deny rule leaves the permission alone.</div>' : '') +
+                '<div class="oidc-grid">' +
                 chk('role_admin_' + idx, 'Administrator', m.IsAdmin) +
                 chk('role_alllibs_' + idx, 'All Libraries', m.EnableAllLibraries) +
                 chk('role_livetv_' + idx, 'Live TV', m.EnableLiveTv) +
@@ -203,17 +245,23 @@ function renderRoleMappings(view) {
                 chk('role_download_' + idx, 'Downloads', m.EnableDownload) +
                 chk('role_syncplay_' + idx, 'SyncPlay (join)', m.EnableSyncplay) +
                 chk('role_syncplayhost_' + idx, 'SyncPlay (host)', m.EnableSyncplayGroupCreation) +
-                '</div>') +
-            section('Libraries', '<p class="oidc-hint">Used when "All Libraries" is unchecked.</p>' +
+                '</div>'
+            ) +
+            subsection('Libraries',
+                '<div class="fieldDescription">Used when "All Libraries" is unchecked.</div>' +
                 '<div class="oidc-lib-controls">' +
-                    '<select is="emby-select" id="role_libadd_' + idx + '"><option value="">-- Select library --</option>' + libOpts + '</select>' +
+                    '<div class="inputContainer"><select is="emby-select" id="role_libadd_' + idx + '" label="Library">' +
+                        '<option value="">-- Select library --</option>' + libOpts +
+                    '</select></div>' +
                     '<button type="button" is="emby-button" class="raised" data-action="add-lib" data-idx="' + idx + '"><span>Add</span></button>' +
                 '</div>' +
                 '<div id="role_libs_' + idx + '" class="oidc-library-list"></div>' +
-                '<div class="oidc-field" style="margin-top:1em;max-width:20em;">' +
-                    '<label class="inputLabel inputLabelUnfocused" for="role_maxrating_' + idx + '">Max Parental Rating (empty = unrestricted)</label>' +
-                    '<input is="emby-input" type="number" id="role_maxrating_' + idx + '" value="' + (m.MaxParentalRating != null ? m.MaxParentalRating : '') + '" />' +
-                '</div>') +
+                '<div class="inputContainer" style="max-width:20em;margin-top:0.8em;">' +
+                    '<input is="emby-input" type="number" id="role_maxrating_' + idx + '"' +
+                    ' label="Max Parental Rating (empty = unrestricted)"' +
+                    ' value="' + (m.MaxParentalRating != null ? m.MaxParentalRating : '') + '" />' +
+                '</div>'
+            ) +
             '<div class="oidc-card-actions">' +
                 '<button type="button" is="emby-button" class="raised oidc-btn-danger" data-action="remove-role" data-idx="' + idx + '"><span>Remove</span></button>' +
             '</div>';
@@ -231,39 +279,46 @@ function renderSamlProviders(view) {
     container.innerHTML = '';
     (cfg.SamlProviders || []).forEach(function (p, idx) {
         var card = document.createElement('div');
-        card.className = 'oidc-card';
-        var statusClass = p.Enabled !== false ? 'oidc-status-on' : 'oidc-status-off';
-        var statusLabel = p.Enabled !== false ? 'Enabled' : 'Disabled';
+        card.className = 'oidc-card listItem';
         card.innerHTML =
             '<div class="oidc-card-header">' +
                 '<div class="oidc-card-title">' +
-                    '<span class="oidc-card-name">' + esc(p.DisplayName || 'New SAML Provider') + '</span>' +
+                    '<span>' + esc(p.DisplayName || 'New SAML Provider') + '</span>' +
                     (p.Id ? '<span class="oidc-chip">' + esc(p.Id) + '</span>' : '') +
                 '</div>' +
-                '<span class="oidc-status ' + statusClass + '"><span class="oidc-status-dot"></span>' + statusLabel + '</span>' +
+                statusPill(p.Enabled !== false) +
             '</div>' +
-            section('Identity', '<div class="oidc-grid">' +
-                fld('Provider ID', 'text', 'saml_id_' + idx, p.Id, 'Unique identifier') +
-                fld('Display Name', 'text', 'saml_name_' + idx, p.DisplayName, 'Shown on login button') +
-                fld('Entity ID (SP)', 'text', 'saml_entity_' + idx, p.EntityId, 'https://jellyfin.example.com', true) +
-                fld('IdP Entity ID', 'text', 'saml_idpentity_' + idx, p.IdpEntityId, 'Expected IdP issuer (e.g. https://idp.example.com)', true) +
-                fld('IdP SSO URL', 'text', 'saml_sso_' + idx, p.SsoUrl, 'https://idp.example.com/sso/saml', true) +
-                '</div>') +
-            section('Claims', '<div class="oidc-grid">' +
-                fld('Username Claim', 'text', 'saml_user_' + idx, p.UsernameClaim || 'NameID', 'NameID or attribute name') +
-                fld('Role Claim', 'text', 'saml_role_' + idx, p.RoleClaim || 'groups', 'Attribute name for groups/roles') +
-                '</div>') +
-            section('Display', '<div class="oidc-grid">' +
-                fld('Button Color', 'color', 'saml_color_' + idx, p.ButtonColor || '#4285F4', '') +
-                '</div>') +
-            section('IdP Signing Certificate', '<textarea id="saml_cert_' + idx + '" rows="5" class="oidc-cert" placeholder="-----BEGIN CERTIFICATE-----&#10;...&#10;-----END CERTIFICATE-----">' +
-                esc(p.IdpCertificate || '') + '</textarea>' +
-                '<p class="oidc-hint">PEM or base64 DER.</p>') +
-            section('Options', '<div class="oidc-checkbox-row">' +
+            subsection('Identity',
+                '<div class="oidc-grid">' +
+                    fld('Provider ID', 'text', 'saml_id_' + idx, p.Id, 'Unique identifier') +
+                    fld('Display Name', 'text', 'saml_name_' + idx, p.DisplayName, 'Shown on login button') +
+                    fld('Entity ID (SP)', 'text', 'saml_entity_' + idx, p.EntityId, 'https://jellyfin.example.com', true) +
+                    fld('IdP Entity ID', 'text', 'saml_idpentity_' + idx, p.IdpEntityId, 'Expected IdP issuer (e.g. https://idp.example.com)', true) +
+                    fld('IdP SSO URL', 'text', 'saml_sso_' + idx, p.SsoUrl, 'https://idp.example.com/sso/saml', true) +
+                '</div>'
+            ) +
+            subsection('Claims',
+                '<div class="oidc-grid">' +
+                    fld('Username Claim', 'text', 'saml_user_' + idx, p.UsernameClaim || 'NameID', 'NameID or attribute name') +
+                    fld('Role Claim', 'text', 'saml_role_' + idx, p.RoleClaim || 'groups', 'Attribute name for groups/roles') +
+                '</div>'
+            ) +
+            subsection('Display',
+                '<div class="oidc-grid">' +
+                    fldColor('Button Color', 'saml_color_' + idx, p.ButtonColor || '#4285F4') +
+                '</div>'
+            ) +
+            subsection('IdP Signing Certificate',
+                '<textarea id="saml_cert_' + idx + '" rows="5" class="oidc-cert" placeholder="-----BEGIN CERTIFICATE-----&#10;...&#10;-----END CERTIFICATE-----">' +
+                    esc(p.IdpCertificate || '') +
+                '</textarea>' +
+                '<div class="fieldDescription">PEM or base64 DER.</div>'
+            ) +
+            subsection('Options',
                 chk('saml_enabled_' + idx, 'Enabled', p.Enabled !== false) +
                 chk('saml_idpinit_' + idx, 'Allow IdP-initiated SSO', p.AllowIdpInitiated) +
-                '</div>' +
-                '<p class="oidc-hint">IdP-initiated SSO skips the in-flight request check; only enable if your IdP requires it.</p>') +
+                '<div class="fieldDescription">IdP-initiated SSO skips the in-flight request check; only enable if your IdP requires it.</div>'
+            ) +
             '<div class="oidc-card-actions">' +
                 '<button type="button" is="emby-button" class="raised oidc-btn-danger" data-action="remove-saml" data-idx="' + idx + '"><span>Remove</span></button>' +
             '</div>';
@@ -319,11 +374,16 @@ function testProvider(view, idx) {
     var scopes = gval(view, 'prov_scopes_' + idx);
     var allowInsecure = gchk(view, 'prov_allowinsecure_' + idx);
     var resultEl = view.querySelector('.oidc-test-result[data-idx="' + idx + '"]');
+    function setResult(color, text) {
+        if (!resultEl) return;
+        resultEl.style.color = color;
+        resultEl.textContent = text;
+    }
     if (!authority) {
-        if (resultEl) { resultEl.style.color = '#c62828'; resultEl.textContent = 'Authority URL is required'; }
+        setResult('var(--theme-error-color, #c62828)', 'Authority URL is required');
         return;
     }
-    if (resultEl) { resultEl.style.color = '#888'; resultEl.textContent = 'Testing...'; }
+    setResult('', 'Testing...');
 
     ApiClient.ajax({
         type: 'POST',
@@ -333,21 +393,19 @@ function testProvider(view, idx) {
         dataType: 'json'
     }).then(function (result) {
         if (result.Success) {
-            if (resultEl) {
-                resultEl.style.color = '#4caf50';
-                var msg = 'OK — issuer ' + result.Issuer;
-                if (result.UnsupportedRequestedScopes && result.UnsupportedRequestedScopes.length > 0) {
-                    msg += ' (unsupported scopes: ' + result.UnsupportedRequestedScopes.join(', ') + ')';
-                    resultEl.style.color = '#ff9800';
-                }
-                resultEl.textContent = msg;
+            var msg = 'OK — issuer ' + result.Issuer;
+            if (result.UnsupportedRequestedScopes && result.UnsupportedRequestedScopes.length > 0) {
+                msg += ' (unsupported scopes: ' + result.UnsupportedRequestedScopes.join(', ') + ')';
+                setResult('var(--theme-warning-color, #ff9800)', msg);
+            } else {
+                setResult('var(--theme-accent-color, #4caf50)', msg);
             }
         } else {
-            if (resultEl) { resultEl.style.color = '#c62828'; resultEl.textContent = 'Failed: ' + result.Error; }
+            setResult('var(--theme-error-color, #c62828)', 'Failed: ' + result.Error);
         }
     }).catch(function (err) {
         var msg = (err && (err.statusText || err.message)) || 'Network error';
-        if (resultEl) { resultEl.style.color = '#c62828'; resultEl.textContent = 'Failed: ' + msg; }
+        setResult('var(--theme-error-color, #c62828)', 'Failed: ' + msg);
     });
 }
 
@@ -488,7 +546,7 @@ export default function (view) {
                 c.style.display = 'none';
             });
             this.classList.add('oidc-tab-active');
-            view.querySelector('#tab-' + this.getAttribute('data-tab')).style.display = 'block';
+            view.querySelector('#tab-' + this.getAttribute('data-tab')).style.display = '';
         });
     });
 
@@ -631,8 +689,13 @@ export default function (view) {
     view.querySelector('#providerList').addEventListener('click', function (e) {
         var btn = e.target.closest('[data-action]');
         if (!btn) return;
-        var idx = parseInt(btn.getAttribute('data-idx'));
         var action = btn.getAttribute('data-action');
+        if (action === 'remove-xform') {
+            var row = btn.closest('.oidc-transform-row');
+            if (row) row.remove();
+            return;
+        }
+        var idx = parseInt(btn.getAttribute('data-idx'));
         if (action === 'remove-provider') {
             cfg.Providers.splice(idx, 1);
             renderProviders(view);
@@ -643,12 +706,7 @@ export default function (view) {
             if (container) {
                 var row = document.createElement('div');
                 row.className = 'oidc-transform-row';
-                row.innerHTML =
-                    '<input is="emby-input" type="text" class="xform-from" placeholder="From (exact)" />' +
-                    '<span class="oidc-xform-arrow">→</span>' +
-                    '<input is="emby-input" type="text" class="xform-to" placeholder="To (empty=drop)" />' +
-                    '<button type="button" class="oidc-xform-remove" title="Remove">&times;</button>';
-                row.querySelector('button').addEventListener('click', function () { row.remove(); });
+                row.innerHTML = transformRowHtml('', '');
                 container.appendChild(row);
             }
         }
