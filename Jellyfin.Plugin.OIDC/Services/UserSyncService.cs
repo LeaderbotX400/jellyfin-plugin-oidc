@@ -86,8 +86,39 @@ public class UserSyncService
         }
         else
         {
-            // No link. Look up by name only to detect collisions; we will NOT auto-bind to a local user
-            // unless the opt-in AutoLinkByVerifiedEmail policy allows it.
+            // No sub-link yet. Resolution order, most-explicit-first:
+            //
+            //   Path 1: Admin-pre-authorized user. The admin set someone's Authentication
+            //           Provider to "OIDC RBAC" in Jellyfin's standard user UI. We find that
+            //           user by the AuthProviderId pin — NOT by username — because Jellyfin
+            //           usernames are display labels, not identities, and there's no reason
+            //           the OIDC preferred_username should match a chosen Jellyfin username.
+            //           If exactly one user is pre-marked and unbound, we bind it. If multiple
+            //           are pre-marked, we tiebreak by username match (best-effort) and refuse
+            //           if still ambiguous.
+            //
+            //   Path 2: AutoLinkByVerifiedEmail policy (opt-in per provider).
+            //
+            //   Path 3: AutoCreateUsers — create a fresh local user matching the OIDC identity.
+            //
+            //   Otherwise: refuse with a clear collision error.
+            var ourProviderId = typeof(Auth.OidcAuthProvider).FullName!;
+            var preAuthorized = await FindAdminPreAuthorizedUserAsync(ourProviderId, username, providerId).ConfigureAwait(false);
+            if (preAuthorized != null)
+            {
+                user = preAuthorized;
+                await _userStore.LinkAsync(user.Id, sub, providerId).ConfigureAwait(false);
+                _logger.LogInformation(
+                    "Linked OIDC sub={SubRedacted} to user '{Username}' via admin-set AuthenticationProviderId",
+                    LogRedaction.RedactSub(sub), user.Username);
+
+                // Fall through to UpdateUserAsync + Upsert + RBAC apply.
+                await _userManager.UpdateUserAsync(user).ConfigureAwait(false);
+                await UpsertAndApplyAsync(user, sub, providerId, roles, entitlements).ConfigureAwait(false);
+                return user.Id;
+            }
+
+            // Fall back to username-based lookup for the remaining paths (create / collision).
             var existing = _userManager.GetUserByName(username);
 
             if (existing == null)
@@ -117,30 +148,10 @@ public class UserSyncService
             }
             else
             {
-                // Name collision. Two accept paths, both gated on explicit admin intent or
-                // policy opt-in; default is to refuse and force the admin to act.
+                // Name collision and not admin-pre-authorized. AutoLinkByVerifiedEmail or refuse.
                 var provider = FindProvider(providerId);
-                var ourProviderId = typeof(Auth.OidcAuthProvider).FullName!;
-
-                // Path 1 (admin pre-authorization via Jellyfin's user UI):
-                // If the existing user's Authentication Provider has been switched to "OIDC RBAC"
-                // in the standard Jellyfin admin UI, treat that as explicit consent to bind on
-                // first OIDC login. This is the migration story for converting existing local
-                // users without enabling the broader AutoLinkByVerifiedEmail policy.
-                if (string.Equals(existing.AuthenticationProviderId, ourProviderId, StringComparison.Ordinal))
-                {
-                    user = existing;
-                    await _userStore.LinkAsync(user.Id, sub, providerId).ConfigureAwait(false);
-                    _logger.LogInformation(
-                        "Auto-linked OIDC sub={SubRedacted} to existing user '{Username}' via admin-set AuthenticationProviderId",
-                        LogRedaction.RedactSub(sub), username);
-                }
-                else
-                {
-                    // Path 2 (per-provider policy): AutoLinkByVerifiedEmail.
-                    user = await AutoLinkByVerifiedEmailAsync(
-                        existing, provider, sub, username, providerId, email ?? string.Empty, emailVerified).ConfigureAwait(false);
-                }
+                user = await AutoLinkByVerifiedEmailAsync(
+                    existing, provider, sub, username, providerId, email ?? string.Empty, emailVerified).ConfigureAwait(false);
             }
         }
 
@@ -229,6 +240,73 @@ public class UserSyncService
         // else: leave AuthenticationProviderId alone — local password still works.
 
         return existing;
+    }
+
+    /// <summary>
+    /// Finds the user (if any) that an admin has pre-authorized for OIDC login by setting their
+    /// Authentication Provider to "OIDC RBAC" in Jellyfin's standard user UI. Identification is
+    /// by the AuthProviderId pin alone — Jellyfin usernames are not identities, so we do not
+    /// require the OIDC preferred_username to match.
+    ///
+    /// Resolution:
+    ///   - 0 candidates: returns null (caller continues with create/collision logic).
+    ///   - 1 candidate: returns that user.
+    ///   - N candidates (admin pinned multiple users for OIDC, all still unbound):
+    ///       prefer a username match against the incoming OIDC username; on tie or no match,
+    ///       refuse with a clear error so the admin can disambiguate.
+    /// </summary>
+    private async Task<Jellyfin.Database.Implementations.Entities.User?> FindAdminPreAuthorizedUserAsync(
+        string ourProviderId, string oidcUsername, string providerId)
+    {
+        var candidates = new List<Jellyfin.Database.Implementations.Entities.User>();
+        foreach (var u in _userManager.Users)
+        {
+            if (!string.Equals(u.AuthenticationProviderId, ourProviderId, StringComparison.Ordinal)) continue;
+            // Already linked to some sub on this provider? Then this candidate "belongs" to that
+            // other sub; skip. (Different provider — we'd happily link them on a 2nd provider.)
+            var existingLinks = await _userStore.GetLinksForUserAsync(u.Id).ConfigureAwait(false);
+            var alreadyLinkedOnThisProvider = false;
+            foreach (var l in existingLinks)
+            {
+                if (string.Equals(l.ProviderId, providerId, StringComparison.OrdinalIgnoreCase))
+                {
+                    alreadyLinkedOnThisProvider = true;
+                    break;
+                }
+            }
+            if (alreadyLinkedOnThisProvider) continue;
+            candidates.Add(u);
+        }
+
+        if (candidates.Count == 0) return null;
+        if (candidates.Count == 1) return candidates[0];
+
+        var byName = candidates.Find(u =>
+            string.Equals(u.Username, oidcUsername, StringComparison.OrdinalIgnoreCase));
+        if (byName != null) return byName;
+
+        _logger.LogWarning(
+            "Multiple admin-pre-authorized OIDC users found and none match OIDC username '{Username}'. " +
+            "Refuse to guess; admin should leave only one user pre-marked for OIDC, OR rename one of the candidates to match the OIDC username.",
+            oidcUsername);
+        throw new OidcUsernameCollisionException(oidcUsername);
+    }
+
+    private async Task UpsertAndApplyAsync(
+        Jellyfin.Database.Implementations.Entities.User user,
+        string sub, string providerId, string[] roles, string[] entitlements)
+    {
+        await _userStore.UpsertAsync(new OidcUserRecord
+        {
+            UserId = user.Id,
+            Username = user.Username,
+            Sub = sub,
+            ProviderId = providerId,
+            Roles = roles,
+            Entitlements = entitlements
+        }).ConfigureAwait(false);
+
+        await _rbacService.ApplyRoleMappingsAsync(user.Id, roles, entitlements, providerId).ConfigureAwait(false);
     }
 
     private Configuration.OidcProviderConfig? FindProvider(string providerId)
