@@ -159,9 +159,20 @@
         #OidcConfigPage .oidc-tab:hover { opacity: 1; }
         #OidcConfigPage .oidc-tab-active { opacity: 1; border-bottom-color: var(--theme-accent-color, #00a4dc) !important; color: var(--theme-accent-color, #00a4dc); }
 
-        /* Responsive auto-grid: 2 cols on wide, 1 col under ~20em — no media query needed. */
-        #OidcConfigPage .oidc-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(20em, 1fr)); gap: 0 1.2em; }
+        /* Responsive auto-grid: fills container, collapses to 1 column on narrow widths
+           without any breakpoint. min(100%, 14em) means columns are 14em wide *or* the
+           full container width if it's narrower — never overflow, always fill. */
+        #OidcConfigPage .oidc-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 14em), 1fr)); gap: 0 1.2em; }
         #OidcConfigPage .oidc-grid-full { grid-column: 1 / -1; }
+
+        /* Checkbox text MUST flow: emby-checkbox renders the box absolute-positioned, so the
+           label needs flex layout with the label span allowed to wrap. min-width:0 on the
+           span prevents flex blowout — without it, a long label would push the container
+           wider than its parent. */
+        #OidcConfigPage .checkboxContainer { max-width: 100%; }
+        #OidcConfigPage .checkboxContainer > label { display: flex; align-items: flex-start; gap: 0.5em; min-width: 0; max-width: 100%; }
+        #OidcConfigPage .checkboxContainer > label > span { flex: 1 1 auto; min-width: 0; white-space: normal; overflow-wrap: anywhere; line-height: 1.4; }
+        #OidcConfigPage .checkboxContainer .fieldDescription { margin-left: 0; max-width: 100%; }
 
         /* Provider/role/SAML card */
         #OidcConfigPage #providerList, #OidcConfigPage #roleMappingList, #OidcConfigPage #samlProviderList { background: transparent; }
@@ -187,20 +198,22 @@
 
         /* Library chip selector — kept custom since no Jellyfin built-in matches. */
         #OidcConfigPage .oidc-lib-controls { display: flex; gap: 0.5em; align-items: flex-end; flex-wrap: wrap; }
-        #OidcConfigPage .oidc-lib-controls .inputContainer { flex: 1; min-width: 14em; margin-bottom: 0; }
+        /* flex-basis on min(100%, X) lets each input shrink to the full container width on
+           narrow screens but grow up to share the row when there's space. No fixed min-width. */
+        #OidcConfigPage .oidc-lib-controls .inputContainer { flex: 1 1 min(100%, 14em); min-width: 0; margin-bottom: 0; }
         #OidcConfigPage .oidc-library-list { display: flex; flex-wrap: wrap; gap: 0.4em; margin-top: 0.6em; }
-        #OidcConfigPage .oidc-library-chip { border: 1px solid var(--theme-accent-color, #00a4dc); color: var(--theme-accent-color, #00a4dc); border-radius: 14px; padding: 0.2em 0.7em; display: inline-flex; align-items: center; gap: 0.5em; font-size: 0.85em; }
+        #OidcConfigPage .oidc-library-chip { border: 1px solid var(--theme-accent-color, #00a4dc); color: var(--theme-accent-color, #00a4dc); border-radius: 14px; padding: 0.2em 0.7em; display: inline-flex; align-items: center; gap: 0.5em; font-size: 0.85em; max-width: 100%; overflow-wrap: anywhere; }
         #OidcConfigPage .oidc-library-chip .remove { cursor: pointer; font-weight: bold; line-height: 1; color: var(--theme-error-color, #ff7961); }
 
         /* Role transform rows (from -> to mapping). */
         #OidcConfigPage .oidc-transform-list { display: flex; flex-direction: column; gap: 0.4em; margin: 0.6em 0; }
         #OidcConfigPage .oidc-transform-row { display: flex; align-items: center; gap: 0.5em; flex-wrap: wrap; }
-        #OidcConfigPage .oidc-transform-row .inputContainer { flex: 1; min-width: 10em; margin-bottom: 0; }
-        #OidcConfigPage .oidc-xform-arrow { opacity: 0.5; }
+        #OidcConfigPage .oidc-transform-row .inputContainer { flex: 1 1 min(100%, 10em); min-width: 0; margin-bottom: 0; }
+        #OidcConfigPage .oidc-xform-arrow { opacity: 0.5; flex-shrink: 0; }
 
         /* Deny-toggle inset, color input, cert textarea, preview output — small bits with no built-in. */
         #OidcConfigPage .oidc-deny-toggle { margin-top: 0.5em; padding: 0.6em 0.8em; border-left: 3px solid var(--theme-error-color, #e53935); background: rgba(127,127,127,0.08); border-radius: 4px; }
-        #OidcConfigPage .oidc-color-input { width: 4em; height: 2.2em; padding: 2px; border: 1px solid rgba(127,127,127,0.3); border-radius: 4px; background: transparent; cursor: pointer; vertical-align: middle; }
+        #OidcConfigPage .oidc-color-input { max-width: 100%; width: 4em; height: 2.2em; padding: 2px; border: 1px solid rgba(127,127,127,0.3); border-radius: 4px; background: transparent; cursor: pointer; vertical-align: middle; }
         #OidcConfigPage .oidc-cert { width: 100%; box-sizing: border-box; font-family: monospace; font-size: 0.85em; background: rgba(0,0,0,0.15); border: 1px solid rgba(127,127,127,0.3); border-radius: 4px; padding: 0.6em; resize: vertical; color: inherit; }
         #OidcConfigPage .oidc-preview-output { margin-top: 1em; padding: 1em; background: rgba(0,0,0,0.15); border: 1px solid rgba(127,127,127,0.2); border-radius: 4px; font-size: 0.85em; white-space: pre-wrap; min-height: 5em; font-family: monospace; }
 
@@ -213,9 +226,18 @@
         /* Mini-section heading inside cards (Identity / Claims / Display / Options / Security). */
         #OidcConfigPage .oidc-subsection-title { font-size: 0.75em; font-weight: 700; letter-spacing: 0.08em; text-transform: uppercase; opacity: 0.6; margin: 0.8em 0 0.4em; }
 
-        @media (max-width: 480px) {
-            #OidcConfigPage .oidc-tab { padding-left: 0.6em; padding-right: 0.6em; font-size: 0.9em; }
-            #OidcConfigPage .oidc-card { padding: 0.8em; }
+        /* Card / page padding scales with container — no media-query breakpoints needed.
+           Card adopts smaller padding when its own width drops below ~30em via container
+           units. Modern browsers (Jellyfin supports current ones) understand cqw. */
+        #OidcConfigPage .oidc-card { container-type: inline-size; }
+        @container (max-width: 30em) {
+            #OidcConfigPage .oidc-card { padding: 0.75em; }
+            #OidcConfigPage .oidc-card-header { font-size: 0.95em; }
         }
+
+        /* Guard rails: no descendant of the config page should overflow its parent. */
+        #OidcConfigPage * { box-sizing: border-box; }
+        #OidcConfigPage img, #OidcConfigPage svg, #OidcConfigPage pre, #OidcConfigPage textarea { max-width: 100%; }
+        #OidcConfigPage .inputContainer, #OidcConfigPage .selectContainer { max-width: 100%; min-width: 0; }
     </style>
 </div>
