@@ -102,8 +102,14 @@ public class UserSyncService
                 user = await _userManager.CreateUserAsync(username).ConfigureAwait(false);
                 user.AuthenticationProviderId = typeof(Auth.OidcAuthProvider).FullName!;
 
+                // Defense in depth: scramble the local password so the user can't be auth'd
+                // via the default password provider if AuthenticationProviderId ever gets
+                // cleared. The setter signature has varied across Jellyfin point releases
+                // (sometimes ChangePassword, sometimes ChangePasswordAsync, sometimes both),
+                // so we resolve via reflection and skip silently when nothing matches —
+                // AuthenticationProviderId above is the load-bearing protection.
                 var randomPassword = Convert.ToBase64String(RandomNumberGenerator.GetBytes(32));
-                await _userManager.ChangePassword(user, randomPassword).ConfigureAwait(false);
+                await TryScrambleLocalPasswordAsync(user, randomPassword).ConfigureAwait(false);
 
                 weCreatedThisUser = true;
                 _logger.LogInformation("Created new OIDC user: {Username}", username);
@@ -190,6 +196,32 @@ public class UserSyncService
 
         _ = weCreatedThisUser; // currently informational; kept for future audit hooks
         return user.Id;
+    }
+
+    private async Task TryScrambleLocalPasswordAsync(Jellyfin.Database.Implementations.Entities.User user, string newPassword)
+    {
+        var type = _userManager.GetType();
+        foreach (var name in new[] { "ChangePasswordAsync", "ChangePassword" })
+        {
+            var method = type.GetMethod(name, new[] { user.GetType(), typeof(string) });
+            if (method == null) continue;
+            try
+            {
+                var result = method.Invoke(_userManager, new object[] { user, newPassword });
+                if (result is Task task)
+                {
+                    await task.ConfigureAwait(false);
+                }
+                return;
+            }
+            catch (System.Reflection.TargetInvocationException ex)
+            {
+                _logger.LogDebug(ex.InnerException ?? ex, "Local-password scramble via {Method} threw; relying on AuthenticationProviderId for isolation", name);
+                return;
+            }
+        }
+
+        _logger.LogDebug("No compatible ChangePassword method on IUserManager; relying on AuthenticationProviderId for isolation");
     }
 
     private Configuration.OidcProviderConfig? FindProvider(string providerId)
