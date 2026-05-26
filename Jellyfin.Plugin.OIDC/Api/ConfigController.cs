@@ -60,6 +60,10 @@ public class ConfigController : ControllerBase
     {
         var persisted = _configProvider.GetConfiguration();
         ConfigMasking.MergeSecrets(incoming, persisted);
+        foreach (var p in incoming.Providers)
+        {
+            p.Authority = SecurityValidation.NormalizeAuthority(p.Authority);
+        }
         _configProvider.SaveConfiguration(incoming);
         return NoContent();
     }
@@ -198,6 +202,7 @@ public class ConfigController : ControllerBase
 
         try
         {
+            request.Authority = SecurityValidation.NormalizeAuthority(request.Authority);
             SecurityValidation.EnsureSecureUrl(request.Authority, request.AllowInsecureAuthority, "Authority");
         }
         catch (System.InvalidOperationException ex)
@@ -212,7 +217,7 @@ public class ConfigController : ControllerBase
             Policy = new DiscoveryPolicy
             {
                 ValidateIssuerName = true,
-                ValidateEndpoints = true
+                ValidateEndpoints = false // host check below — see OidcDiscoveryCache for rationale
             }
         }).ConfigureAwait(false);
 
@@ -224,6 +229,17 @@ public class ConfigController : ControllerBase
                 Error = disco.Error,
                 ErrorType = disco.ErrorType.ToString()
             });
+        }
+
+        try
+        {
+            SecurityValidation.EnsureSameHost(request.Authority, disco.TokenEndpoint, "token_endpoint");
+            SecurityValidation.EnsureSameHost(request.Authority, disco.AuthorizeEndpoint, "authorization_endpoint");
+            SecurityValidation.EnsureSameHost(request.Authority, disco.JwksUri, "jwks_uri");
+        }
+        catch (System.InvalidOperationException ex)
+        {
+            return Ok(new { Success = false, Error = ex.Message });
         }
 
         var requestedScopes = (request.Scopes ?? string.Empty)

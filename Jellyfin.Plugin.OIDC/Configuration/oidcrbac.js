@@ -128,10 +128,10 @@ function renderProviders(view) {
                     (p.AllowedSigningAlgorithms || ['RS256','RS384','RS512','ES256','ES384','ES512','PS256','PS384','PS512']).join(','),
                     'Comma-separated. Adding HS256/HS384/HS512 is DANGEROUS (relies on client_secret strength).', true) +
                 '</div>' +
-                '<div class="oidc-checkbox-row">' +
-                chk('prov_allowinsecure_' + idx, 'Allow insecure authority (DANGER: dev/test only — localhost HTTP)', p.AllowInsecureAuthority) +
+                '<div class="oidc-checkbox-row oidc-checkbox-row-wide">' +
+                chk('prov_allowinsecure_' + idx, 'Allow insecure authority (dev/test only)', p.AllowInsecureAuthority) +
                 '</div>' +
-                '<p class="oidc-hint">HTTPS is required for Authority / JWKS / token endpoints. The "Allow insecure" toggle relaxes this for localhost only and must never be enabled in production.</p>') +
+                '<p class="oidc-hint"><strong>DANGER:</strong> HTTPS is required for Authority / JWKS / token endpoints. The "Allow insecure" toggle relaxes this for localhost only and must never be enabled in production.</p>') +
             '<details class="oidc-details"><summary>Role Transforms <span class="oidc-count">(' + (p.RoleTransforms || []).length + ')</span></summary>' +
                 '<div class="oidc-transform-list" id="prov_transforms_' + idx + '"></div>' +
                 '<button type="button" is="emby-button" class="oidc-btn-add" data-action="add-transform" data-idx="' + idx + '"><span>+ Add Transform</span></button>' +

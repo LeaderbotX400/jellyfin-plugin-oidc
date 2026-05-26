@@ -75,6 +75,7 @@ public sealed class OidcDiscoveryCache : IDisposable
     {
         ObjectDisposedException.ThrowIf(_disposed, this);
 
+        authority = SecurityValidation.NormalizeAuthority(authority);
         SecurityValidation.EnsureSecureUrl(authority, allowInsecureAuthority, nameof(authority));
 
         var effectiveTtl = ttl ?? TimeSpan.FromHours(1);
@@ -102,7 +103,12 @@ public sealed class OidcDiscoveryCache : IDisposable
                 Policy = new DiscoveryPolicy
                 {
                     ValidateIssuerName = true,
-                    ValidateEndpoints = !_allowEndpointMismatch
+                    // IdentityModel's ValidateEndpoints enforces a path-PREFIX match against the
+                    // issuer URL, which breaks real-world IdPs like Authentik (issuer at
+                    // /application/o/<slug>/, endpoints at /application/o/authorize/). The
+                    // security property we actually need — endpoints not pointing at attacker
+                    // hosts — is enforced below by EnsureSameHost + EnsureSecureUrl.
+                    ValidateEndpoints = false
                 }
             }).ConfigureAwait(false);
 
@@ -115,6 +121,15 @@ public sealed class OidcDiscoveryCache : IDisposable
                 if (!string.IsNullOrEmpty(doc.JwksUri))
                 {
                     SecurityValidation.EnsureSecureUrl(doc.JwksUri, allowInsecureAuthority, "jwks_uri");
+                }
+
+                // Enforce same-host between the configured authority and the discovered endpoints.
+                // Skipped when the test-only allowEndpointMismatch ctor is used (in-process WireMock).
+                if (!_allowEndpointMismatch)
+                {
+                    SecurityValidation.EnsureSameHost(authority, doc.TokenEndpoint, "token_endpoint");
+                    SecurityValidation.EnsureSameHost(authority, doc.AuthorizeEndpoint, "authorization_endpoint");
+                    SecurityValidation.EnsureSameHost(authority, doc.JwksUri, "jwks_uri");
                 }
 
                 _cache[authority] = new CacheEntry(doc, DateTime.UtcNow.Add(effectiveTtl));

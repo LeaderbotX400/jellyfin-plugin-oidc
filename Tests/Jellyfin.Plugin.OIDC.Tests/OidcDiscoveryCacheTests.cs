@@ -59,13 +59,45 @@ public class OidcDiscoveryCacheTests
     [Fact]
     public async Task GetAsync_EndpointHostMismatch_RejectedByDefault()
     {
-        // Authority and endpoints point at different hosts — IdentityModel's ValidateEndpoints catches this.
+        // Authority and endpoints point at different hosts → SecurityValidation.EnsureSameHost rejects.
         var authority = "https://idp.example";
         var cache = new OidcDiscoveryCache(MakeFactory(req => BuildDiscoveryJson(authority, tokenHost: "https://attacker.example")),
             NullLogger<OidcDiscoveryCache>.Instance);
 
+        await Assert.ThrowsAsync<System.InvalidOperationException>(() => cache.GetAsync(authority));
+    }
+
+    [Fact]
+    public async Task GetAsync_EndpointDifferentPathSameHost_Accepted()
+    {
+        // Real-world IdPs like Authentik serve endpoints at sibling paths of the issuer:
+        // issuer = https://idp.example/application/o/<slug>/  (in BuildDiscoveryJson the issuer
+        // matches the authority root). Authorize/token at https://idp.example/application/o/authorize/
+        // are on the same host — must be accepted (was rejected by IdentityModel's path-prefix
+        // ValidateEndpoints before; now we host-check ourselves).
+        var authority = "https://idp.example";
+        var cache = new OidcDiscoveryCache(
+            MakeFactory(req => BuildDiscoveryJson(authority, tokenHost: "https://idp.example/application/o")),
+            NullLogger<OidcDiscoveryCache>.Instance);
+
         var doc = await cache.GetAsync(authority);
-        Assert.True(doc.IsError);
+        Assert.False(doc.IsError);
+    }
+
+    [Theory]
+    [InlineData("https://idp.example/.well-known/openid-configuration")]
+    [InlineData("https://idp.example/.well-known/openid-configuration/")]
+    [InlineData("https://idp.example/")]
+    public async Task GetAsync_NormalizesDiscoverySuffixAndTrailingSlash(string authorityAsTyped)
+    {
+        // Admins commonly paste the full discovery URL. Strip the suffix and any trailing /.
+        var cache = new OidcDiscoveryCache(
+            MakeFactory(req => BuildDiscoveryJson("https://idp.example")),
+            NullLogger<OidcDiscoveryCache>.Instance,
+            allowEndpointMismatch: true);
+
+        var doc = await cache.GetAsync(authorityAsTyped);
+        Assert.False(doc.IsError);
     }
 
     [Fact]

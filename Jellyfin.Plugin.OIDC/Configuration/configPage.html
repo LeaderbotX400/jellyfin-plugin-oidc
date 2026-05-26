@@ -262,6 +262,9 @@
             grid-template-columns: repeat(auto-fill, minmax(180px, 1fr));
             gap: 0.4em 1em;
         }
+        /* Single-checkbox rows with a long label — let the label use full width
+           so the emby-checkbox absolute-positioned outline doesn't overlap wrapped text. */
+        #OidcConfigPage .oidc-checkbox-row-wide { display: block; }
         /* Let native emby-checkbox styling drive layout — don't override padding/display.
            The web component injects an absolute-positioned .checkboxOutline that needs
            the label's native padding-left to avoid overlapping label text. */

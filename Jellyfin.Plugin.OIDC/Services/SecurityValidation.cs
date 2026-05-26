@@ -58,4 +58,57 @@ public static class SecurityValidation
             || host.Equals("::1", StringComparison.Ordinal)
             || host.Equals("[::1]", StringComparison.Ordinal);
     }
+
+    /// <summary>
+    /// Throws if the discovered endpoint URL is not on the same scheme+host+port as the authority.
+    /// Defense against a malicious/compromised discovery document that points endpoints at attacker
+    /// hosts. We intentionally do NOT require a shared path prefix — many real IdPs (Authentik,
+    /// AWS Cognito, etc.) serve sibling endpoints from a different path than the issuer.
+    /// </summary>
+    public static void EnsureSameHost(string? authorityUrl, string? endpointUrl, string paramName)
+    {
+        if (string.IsNullOrWhiteSpace(endpointUrl))
+        {
+            return; // optional endpoints (e.g. JWKS) are validated separately for presence
+        }
+
+        if (!Uri.TryCreate(authorityUrl, UriKind.Absolute, out var authority)
+            || !Uri.TryCreate(endpointUrl, UriKind.Absolute, out var endpoint))
+        {
+            throw new InvalidOperationException(
+                $"Cannot validate {paramName}: authority or endpoint is not a valid absolute URL");
+        }
+
+        if (!string.Equals(authority.Scheme, endpoint.Scheme, StringComparison.OrdinalIgnoreCase)
+            || !string.Equals(authority.Host, endpoint.Host, StringComparison.OrdinalIgnoreCase)
+            || authority.Port != endpoint.Port)
+        {
+            throw new InvalidOperationException(
+                $"Discovery document {paramName} ({endpoint.Scheme}://{endpoint.Authority}) " +
+                $"is not on the same host as the authority ({authority.Scheme}://{authority.Authority}). " +
+                "This usually indicates a misconfigured or malicious IdP. " +
+                "If your IdP legitimately uses a different host, this is not supported.");
+        }
+    }
+
+    /// <summary>
+    /// Normalizes an admin-supplied authority URL. Strips an accidentally-included
+    /// <c>/.well-known/openid-configuration</c> suffix (with or without trailing slash) and any
+    /// trailing slash. The result is the issuer base URL that IdentityModel expects.
+    /// </summary>
+    public static string NormalizeAuthority(string? authority)
+    {
+        if (string.IsNullOrWhiteSpace(authority)) return authority ?? string.Empty;
+        var s = authority.Trim();
+        const string wellKnown = "/.well-known/openid-configuration";
+        if (s.EndsWith(wellKnown + "/", StringComparison.OrdinalIgnoreCase))
+        {
+            s = s[..^(wellKnown.Length + 1)];
+        }
+        else if (s.EndsWith(wellKnown, StringComparison.OrdinalIgnoreCase))
+        {
+            s = s[..^wellKnown.Length];
+        }
+        return s.TrimEnd('/');
+    }
 }
