@@ -35,19 +35,19 @@ public static class ConfigMigration
         {
             bool changed = false;
 
-            if (m.EnableMediaPlayback == true && !m.MigratedDenyDefaults)
+            if (m.EnableMediaPlayback == true)
             {
                 m.EnableMediaPlayback = null;
                 changed = true;
             }
 
-            if (m.EnableRemoteAccess == true && !m.MigratedDenyDefaults)
+            if (m.EnableRemoteAccess == true)
             {
                 m.EnableRemoteAccess = null;
                 changed = true;
             }
 
-            if (m.EnableTranscoding == true && !m.MigratedDenyDefaults)
+            if (m.EnableTranscoding == true)
             {
                 m.EnableTranscoding = null;
                 changed = true;
@@ -55,7 +55,6 @@ public static class ConfigMigration
 
             if (changed)
             {
-                m.MigratedDenyDefaults = true;
                 migrated.Add(m.RoleName);
             }
         }

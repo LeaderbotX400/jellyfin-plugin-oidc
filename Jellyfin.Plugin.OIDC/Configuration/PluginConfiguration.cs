@@ -216,6 +216,15 @@ public class PluginConfiguration : BasePluginConfiguration
     /// to see arbitrary group memberships and user identifiers. Default false.
     /// </summary>
     public bool VerboseClaimLogging { get; set; } = false;
+
+    /// <summary>
+    /// Sentinel for the one-time v0.1.3 deny-mapping migration (see <see cref="Services.ConfigMigration"/>).
+    /// False on installs that pre-date v0.1.3. Set true after the migration runs once; never re-evaluated.
+    /// Kept at the plugin level rather than per-mapping so the admin UI doesn't need to round-trip it
+    /// on every save — round-tripping a per-mapping sentinel made every save re-run the migration and
+    /// wipe deliberately-set deny flags.
+    /// </summary>
+    public bool MigratedDenyDefaultsV013 { get; set; } = false;
 }
 
 /// <summary>

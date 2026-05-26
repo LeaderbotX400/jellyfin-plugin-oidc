@@ -21,11 +21,12 @@ public class OidcPlugin : BasePlugin<PluginConfiguration>, IHasWebPages
         Instance = this;
         _log = LoggerFactory.Create(b => b.AddConsole()).CreateLogger<OidcPlugin>();
 
-        // Run migration on initial load.
+        // Run the one-time legacy-deny migration on initial load only. The UI does not round-trip
+        // the plugin-level sentinel, but System.Text.Json deserialization preserves it from the
+        // persisted XML on every load, so the second startup sees MigratedDenyDefaultsV013=true
+        // and skips. We intentionally do NOT re-run on ConfigurationChanged — doing so wiped
+        // deliberately-set deny flags on every save (the UI cannot send a per-mapping sentinel).
         RunMigration(Configuration);
-
-        // Re-run after every config save (e.g. from the admin UI).
-        ConfigurationChanged += (_, cfg) => RunMigration((PluginConfiguration)cfg);
     }
 
     public static OidcPlugin? Instance { get; private set; }
@@ -87,6 +88,8 @@ public class OidcPlugin : BasePlugin<PluginConfiguration>, IHasWebPages
 
     private void RunMigration(PluginConfiguration cfg)
     {
+        if (cfg.MigratedDenyDefaultsV013) return;
+
         var migrated = ConfigMigration.MigrateDenyMappings(cfg.RoleMappings);
         foreach (var role in migrated)
         {
@@ -98,5 +101,8 @@ public class OidcPlugin : BasePlugin<PluginConfiguration>, IHasWebPages
                 "permissions you want this deny rule to strip.",
                 role);
         }
+
+        cfg.MigratedDenyDefaultsV013 = true;
+        SaveConfiguration(cfg);
     }
 }

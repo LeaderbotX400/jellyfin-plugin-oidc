@@ -109,6 +109,7 @@ function renderProviders(view) {
                 fld('Role Claim Path', 'text', 'prov_roleclaim_' + idx, p.RoleClaim || 'groups', 'e.g. groups or realm_access.roles') +
                 fld('Username Claim', 'text', 'prov_userclaim_' + idx, p.UsernameClaim || 'preferred_username', '') +
                 fld('Display Name Claim', 'text', 'prov_displayclaim_' + idx, p.DisplayNameClaim || 'name', '') +
+                fld('Email Claim', 'text', 'prov_emailclaim_' + idx, p.EmailClaim || 'email', 'Used by Auto-link by verified email') +
                 fld('Entitlement Claim', 'text', 'prov_entclaim_' + idx, p.EntitlementClaim || 'entitlements', 'Authentik-style entitlements') +
                 fld('Entitlement Prefix', 'text', 'prov_entprefix_' + idx, p.EntitlementPrefix || 'jellyfin:', '') +
                 '</div>') +
@@ -365,6 +366,7 @@ function collectProviders(view) {
             RoleClaim: gval(view, 'prov_roleclaim_' + idx),
             UsernameClaim: gval(view, 'prov_userclaim_' + idx),
             DisplayNameClaim: gval(view, 'prov_displayclaim_' + idx),
+            EmailClaim: gval(view, 'prov_emailclaim_' + idx) || 'email',
             ButtonColor: gval(view, 'prov_color_' + idx),
             AdditionalParameters: gval(view, 'prov_params_' + idx),
             EntitlementClaim: gval(view, 'prov_entclaim_' + idx) || 'entitlements',
@@ -495,7 +497,7 @@ export default function (view) {
             ProviderId: '', DisplayName: 'New Provider', Authority: '',
             ClientId: '', ClientSecret: '', Scopes: 'openid profile email',
             RoleClaim: 'groups', UsernameClaim: 'preferred_username',
-            DisplayNameClaim: 'name', Enabled: true, ButtonColor: '#4285F4',
+            DisplayNameClaim: 'name', EmailClaim: 'email', Enabled: true, ButtonColor: '#4285F4',
             ButtonIcon: '', AdditionalParameters: '',
             EntitlementClaim: 'entitlements', EntitlementPrefix: 'jellyfin:',
             EnableEntitlements: true, RequireEmailVerified: false,

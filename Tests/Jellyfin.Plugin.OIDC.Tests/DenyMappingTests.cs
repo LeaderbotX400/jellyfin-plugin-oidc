@@ -233,7 +233,6 @@ public class DenyMappingTests
         Assert.Null(m.EnableRemoteAccess);  // Legacy default-true should be cleared to null
         Assert.Null(m.EnableTranscoding);   // Legacy default-true should be cleared to null
         Assert.True(m.IsAdmin, "Explicitly-set non-nullable field must not be touched");
-        Assert.True(m.MigratedDenyDefaults, "Migration sentinel must be set to prevent double-migration");
     }
 
     // ── NFKC Unicode normalization tests (TASK-20) ────────────────────────────
@@ -291,43 +290,12 @@ public class DenyMappingTests
     }
 
     /// <summary>
-    /// Idempotency: running MigrateDenyMappings a second time on an already-migrated mapping
-    /// must be a no-op — the sentinel (<see cref="RoleMapping.MigratedDenyDefaults"/>) prevents
-    /// the migration from zeroing out fields that the admin deliberately set to true after migration.
-    /// </summary>
-    [Fact]
-    public void Migration_AlreadyMigrated_SecondCallIsNoOp()
-    {
-        // Simulate a deny mapping that was migrated once (sentinel = true) and then the admin
-        // deliberately re-enabled EnableMediaPlayback = true via the UI (new serialiser wrote it).
-        var roleMappings = new List<RoleMapping>
-        {
-            new()
-            {
-                RoleName = "postmigration",
-                IsExplicitDeny = true,
-                EnableMediaPlayback = true,  // deliberately re-enabled post-migration
-                EnableRemoteAccess = null,   // left null from prior migration
-                EnableTranscoding = null,    // left null from prior migration
-                MigratedDenyDefaults = true  // sentinel already set
-            }
-        };
-
-        // Second invocation of the migration.
-        var migrated = ConfigMigration.MigrateDenyMappings(roleMappings);
-
-        // The sentinel was already set — the migration must touch nothing.
-        Assert.Empty(migrated);
-        var m = roleMappings[0];
-        Assert.True(m.EnableMediaPlayback,
-            "Deliberately-set true must not be wiped on second migration pass");
-        Assert.Null(m.EnableRemoteAccess);
-        Assert.Null(m.EnableTranscoding);
-    }
-
-    /// <summary>
-    /// A deny mapping with MigratedDenyDefaults=false but no legacy-true fields
-    /// (e.g. explicitly null from a fresh save) must not be added to the migrated list.
+    /// Idempotency is enforced at the plugin level via <see cref="PluginConfiguration.MigratedDenyDefaultsV013"/>
+    /// rather than per-mapping, because the admin UI cannot round-trip a per-mapping sentinel without
+    /// requiring the JS to know about it (and dropping it on save re-ran the migration and silently
+    /// wiped deliberately-set deny flags). <see cref="ConfigMigration.MigrateDenyMappings"/> itself
+    /// is unconditional — it must always be safe to call once. Production callers must gate it on
+    /// the plugin-level sentinel.
     /// </summary>
     [Fact]
     public void Migration_NothingToMigrate_ReturnsEmptyList()
@@ -341,15 +309,12 @@ public class DenyMappingTests
                 EnableMediaPlayback = null,
                 EnableRemoteAccess = null,
                 EnableTranscoding = null
-                // MigratedDenyDefaults = false (default)
             }
         };
 
         var migrated = ConfigMigration.MigrateDenyMappings(roleMappings);
 
         Assert.Empty(migrated);
-        // Sentinel must NOT be set (nothing changed)
-        Assert.False(roleMappings[0].MigratedDenyDefaults);
     }
 
     // ── Test helper that exposes the two-pass grant/deny logic without Jellyfin DI ──
