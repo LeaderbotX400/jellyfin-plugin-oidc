@@ -59,6 +59,21 @@ function chk(id, label, checked) {
         '</div>';
 }
 
+// Checkbox with a short description rendered beneath the label.
+// Title + description live in a single flex column inside the <label> so the
+// column is vertically centered against the checkbox (see CSS in configPage.html).
+function chkDesc(id, label, checked, desc) {
+    return '<div class="checkboxContainer checkboxContainer-withDescription">' +
+        '<label>' +
+        '<input is="emby-checkbox" type="checkbox" id="' + id + '"' + (checked ? ' checked' : '') + ' />' +
+        '<span class="oidc-chk-text">' +
+            '<span class="oidc-chk-title">' + esc(label) + '</span>' +
+            '<span class="fieldDescription oidc-chk-desc">' + esc(desc) + '</span>' +
+        '</span>' +
+        '</label>' +
+        '</div>';
+}
+
 function subsection(title, body) {
     return (title ? '<div class="oidc-subsection-title">' + esc(title) + '</div>' : '') + body;
 }
@@ -230,21 +245,34 @@ function renderRoleMappings(view) {
             subsection('Permissions',
                 (m.IsExplicitDeny ? '<div class="fieldDescription">Only <strong>checked</strong> permissions will be stripped. Unchecked = this deny rule leaves the permission alone.</div>' : '') +
                 '<div class="oidc-grid">' +
-                chk('role_admin_' + idx, 'Administrator', m.IsAdmin) +
-                chk('role_alllibs_' + idx, 'All Libraries', m.EnableAllLibraries) +
-                chk('role_livetv_' + idx, 'Live TV', m.EnableLiveTv) +
-                chk('role_livetvmgmt_' + idx, 'Live TV Mgmt', m.EnableLiveTvManagement) +
+                chkDesc('role_admin_' + idx, 'Administrator', m.IsAdmin,
+                    'Full server access — settings, users, plugins, libraries.') +
+                chkDesc('role_alllibs_' + idx, 'Access all libraries', m.EnableAllLibraries,
+                    'Grant every library. If off, pick specific libraries below.') +
+                chkDesc('role_livetv_' + idx, 'Watch Live TV', m.EnableLiveTv,
+                    'View Live TV channels and recordings.') +
+                chkDesc('role_livetvmgmt_' + idx, 'Manage Live TV', m.EnableLiveTvManagement,
+                    'Schedule recordings and edit DVR settings. Implies watch access.') +
                 // For deny mappings: null means "not set" → unchecked (explicit true required to strip).
                 // For allow mappings: null means "default true" → checked (backward compat).
-                chk('role_playback_' + idx, 'Playback', m.IsExplicitDeny ? m.EnableMediaPlayback === true : m.EnableMediaPlayback !== false) +
-                chk('role_remote_' + idx, 'Remote Access', m.IsExplicitDeny ? m.EnableRemoteAccess === true : m.EnableRemoteAccess !== false) +
-                chk('role_transcode_' + idx, 'Transcoding', m.IsExplicitDeny ? m.EnableTranscoding === true : m.EnableTranscoding !== false) +
-                chk('role_delete_' + idx, 'Delete Content', m.EnableContentDeletion) +
-                chk('role_collections_' + idx, 'Collections', m.EnableCollectionManagement) +
-                chk('role_subtitles_' + idx, 'Subtitles', m.EnableSubtitleManagement) +
-                chk('role_download_' + idx, 'Downloads', m.EnableDownload) +
-                chk('role_syncplay_' + idx, 'SyncPlay (join)', m.EnableSyncplay) +
-                chk('role_syncplayhost_' + idx, 'SyncPlay (host)', m.EnableSyncplayGroupCreation) +
+                chkDesc('role_playback_' + idx, 'Play media', m.IsExplicitDeny ? m.EnableMediaPlayback === true : m.EnableMediaPlayback !== false,
+                    'Required to stream anything. Off = account cannot play media.') +
+                chkDesc('role_remote_' + idx, 'Remote access', m.IsExplicitDeny ? m.EnableRemoteAccess === true : m.EnableRemoteAccess !== false,
+                    'Allow connections from outside the local network.') +
+                chkDesc('role_transcode_' + idx, 'Allow transcoding', m.IsExplicitDeny ? m.EnableTranscoding === true : m.EnableTranscoding !== false,
+                    'Permit server-side transcoding for this user. Off = direct play / remux only.') +
+                chkDesc('role_delete_' + idx, 'Delete media', m.EnableContentDeletion,
+                    'Permanently remove items from libraries.') +
+                chkDesc('role_collections_' + idx, 'Manage collections', m.EnableCollectionManagement,
+                    'Create, edit, and delete collections.') +
+                chkDesc('role_subtitles_' + idx, 'Manage subtitles', m.EnableSubtitleManagement,
+                    'Download and edit subtitles for library items.') +
+                chkDesc('role_download_' + idx, 'Download media', m.EnableDownload,
+                    'Save media to client devices for offline playback.') +
+                chkDesc('role_syncplay_' + idx, 'Join SyncPlay', m.EnableSyncplay,
+                    'Participate in synchronized group playback sessions.') +
+                chkDesc('role_syncplayhost_' + idx, 'Host SyncPlay', m.EnableSyncplayGroupCreation,
+                    'Create SyncPlay groups. Implies join.') +
                 '</div>'
             ) +
             subsection('Libraries',
