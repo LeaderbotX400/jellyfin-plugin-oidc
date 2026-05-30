@@ -154,18 +154,61 @@ jobs:
         # reuses the existing release and overwrites the asset, mirroring the
         # version-dedupe in the manifest step. Forgejo does not auto-generate
         # release notes, so the body is a simple changelog line.
+        #
+        # All API calls go through api_json() so we (a) capture the HTTP status,
+        # (b) print the response body on failure, and (c) validate that 2xx
+        # responses are actually JSON before handing them to jq. Without this,
+        # a proxy returning an HTML/plain-text body (even with HTTP 200) shows
+        # up only as a cryptic `jq: parse error: Invalid numeric literal` and
+        # an exit-code-4 step failure.
         run: |
           set -euo pipefail
           API="${{ github.server_url }}/api/v1/repos/${{ github.repository }}"
           AUTH="Authorization: token ${{ secrets.GITHUB_TOKEN }}"
           TAG="${GITHUB_REF_NAME}"
 
+          # api_json METHOD URL [curl args...]
+          #   stdout: response body (only on 2xx + valid JSON)
+          #   exit:   0 on success, 1 on transport error, 2 on non-2xx, 3 on non-JSON body
+          #   404 is treated as success-with-empty-output so callers can probe existence.
+          api_json() {
+            local method=$1 url=$2; shift 2
+            local tmp status
+            tmp=$(mktemp)
+            status=$(curl -sS -o "$tmp" -w '%{http_code}' \
+              -H "$AUTH" -H "Accept: application/json" \
+              -X "$method" "$url" "$@") || {
+                echo "::error::curl transport failure for $method $url" >&2
+                cat "$tmp" >&2 || true
+                rm -f "$tmp"
+                return 1
+              }
+            if [ "$status" = "404" ]; then
+              rm -f "$tmp"
+              return 0
+            fi
+            if [ "$status" -lt 200 ] || [ "$status" -ge 300 ]; then
+              echo "::error::HTTP $status from $method $url" >&2
+              cat "$tmp" >&2
+              rm -f "$tmp"
+              return 2
+            fi
+            if ! jq -e . <"$tmp" >/dev/null 2>&1; then
+              echo "::error::Non-JSON 2xx body from $method $url" >&2
+              cat "$tmp" >&2
+              rm -f "$tmp"
+              return 3
+            fi
+            cat "$tmp"
+            rm -f "$tmp"
+          }
+
           # Reuse an existing release for this tag if present, else create one.
-          rel_id=$(curl -sf -H "$AUTH" "$API/releases/tags/$TAG" | jq -r '.id // empty' || true)
+          rel_id=$(api_json GET "$API/releases/tags/$TAG" | jq -r '.id // empty')
           if [ -z "$rel_id" ]; then
-            rel_id=$(curl -sf -H "$AUTH" -H "Content-Type: application/json" \
-              -X POST "$API/releases" \
-              -d "$(jq -n --arg t "$TAG" '{tag_name:$t, name:$t, body:("Release "+$t), draft:false, prerelease:false}')" \
+            body=$(jq -n --arg t "$TAG" '{tag_name:$t, name:$t, body:("Release "+$t), draft:false, prerelease:false}')
+            rel_id=$(api_json POST "$API/releases" \
+              -H "Content-Type: application/json" --data-binary "$body" \
               | jq -r '.id')
             echo "Created release $TAG (id=$rel_id)"
           else
@@ -173,15 +216,17 @@ jobs:
           fi
 
           # Drop any existing asset of the same name so a re-run uploads fresh.
-          for aid in $(curl -sf -H "$AUTH" "$API/releases/$rel_id/assets" \
+          for aid in $(api_json GET "$API/releases/$rel_id/assets" \
               | jq -r '.[] | select(.name=="oidc-rbac.zip") | .id'); do
             echo "Deleting stale asset id=$aid"
-            curl -sf -H "$AUTH" -X DELETE "$API/releases/$rel_id/assets/$aid"
+            api_json DELETE "$API/releases/$rel_id/assets/$aid" >/dev/null
           done
 
-          curl -sf -H "$AUTH" \
-            -F "attachment=@oidc-rbac.zip;type=application/zip" \
-            "$API/releases/$rel_id/assets?name=oidc-rbac.zip" > /dev/null
+          # Asset upload returns the asset metadata as JSON; route through api_json
+          # so a non-JSON/HTML response surfaces with a body instead of breaking
+          # the next jq downstream.
+          api_json POST "$API/releases/$rel_id/assets?name=oidc-rbac.zip" \
+            -F "attachment=@oidc-rbac.zip;type=application/zip" >/dev/null
           echo "Uploaded oidc-rbac.zip to release $TAG"
 
       - name: Verify all manifest sourceUrls are reachable
