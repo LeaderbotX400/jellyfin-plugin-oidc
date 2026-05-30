@@ -1,5 +1,25 @@
 name: Build & Release
 
+# Forgejo Actions variant of .github/workflows/release.yml, targeting the
+# self-hosted instance at forgejo.singerfamily.ca.
+#
+# Key differences from the GitHub workflow:
+#   - Actions are referenced by full https://github.com/... URLs so the original
+#     SHA pins still apply (Forgejo's default action registry, code.forgejo.org,
+#     does not mirror setup-dotnet).
+#   - The GitHub-only softprops/action-gh-release step is replaced by curl calls
+#     against Forgejo's Gitea-compatible release API.
+#   - Download/server URLs use ${{ github.server_url }}, which Forgejo populates
+#     with the instance URL, instead of a literal https://github.com.
+#
+# NOTE: Forgejo also scans .github/workflows by default, so the original
+# release.yml will ALSO try to run here and fail. Delete .github/workflows/release.yml
+# (or disable .github scanning) if Forgejo is the only forge for this repo.
+#
+# NOTE: the manifest approach requires the repo's releases to be publicly
+# readable — the Jellyfin consumer and the reachability check below fetch the
+# asset without auth.
+
 on:
   workflow_dispatch:
     inputs:
@@ -10,7 +30,7 @@ on:
     tags:
       - "v*"
 
-# Default to read-only. The push-manifest job below overrides with contents: write.
+# Default to read-only. The release job below overrides with contents: write.
 permissions:
   contents: read
 
@@ -18,9 +38,22 @@ jobs:
   release:
     runs-on: ubuntu-latest
     permissions:
-      contents: write  # needed to create the GitHub Release and push manifest update
+      contents: write  # needed to create the release and push the manifest update
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5  # v4.3.1
+
+      - name: Ensure CLI tooling (zip, jq)
+        # The default Forgejo runner image (node:bookworm) ships curl/git/md5sum
+        # but not zip or jq. Install them if absent. Adjust if your runner uses a
+        # non-Debian base image.
+        run: |
+          set -eu
+          if ! command -v zip >/dev/null || ! command -v jq >/dev/null; then
+            SUDO=""
+            [ "$(id -u)" -ne 0 ] && SUDO=sudo
+            $SUDO apt-get update
+            $SUDO apt-get install -y zip jq
+          fi
 
       - name: Validate release branch
         # Only allow releases from the main branch or tag pushes.
@@ -38,7 +71,7 @@ jobs:
           fi
 
       - name: Setup .NET
-        uses: actions/setup-dotnet@67a3573c9a986a3f9c594539f4ab511d57bb3ce9  # v4.3.1
+        uses: actions/setup-dotnet@9a946fdbd5fb07b82b2f5a4466058b876ab72bb2  # v4.3.1
         with:
           dotnet-version: "10.0.x"
 
@@ -81,7 +114,7 @@ jobs:
           CHECKSUM="${{ steps.checksums.outputs.md5_checksum }}"
           TIMESTAMP=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
           VERSION="${{ steps.version.outputs.version }}.0"
-          DOWNLOAD_URL="https://github.com/${{ github.repository }}/releases/download/${GITHUB_REF_NAME}/oidc-rbac.zip"
+          DOWNLOAD_URL="${{ github.server_url }}/${{ github.repository }}/releases/download/${GITHUB_REF_NAME}/oidc-rbac.zip"
 
           # manifest.json lives on its own orphan `manifest` branch so releases
           # don't churn main. Fetch the current manifest from that branch; if the
@@ -116,17 +149,47 @@ jobs:
           mv manifest.json.new manifest.json
 
       - name: Create release
-        uses: softprops/action-gh-release@3bb12739c298aeb8a4eeaf626c5b8d85266b0e65  # v2.6.2
-        with:
-          files: oidc-rbac.zip
-          generate_release_notes: true
+        # Replaces softprops/action-gh-release (GitHub Releases API) with calls to
+        # Forgejo's Gitea-compatible release API. Idempotent: on a re-tag/re-run it
+        # reuses the existing release and overwrites the asset, mirroring the
+        # version-dedupe in the manifest step. Forgejo does not auto-generate
+        # release notes, so the body is a simple changelog line.
+        run: |
+          set -euo pipefail
+          API="${{ github.server_url }}/api/v1/repos/${{ github.repository }}"
+          AUTH="Authorization: token ${{ secrets.GITHUB_TOKEN }}"
+          TAG="${GITHUB_REF_NAME}"
+
+          # Reuse an existing release for this tag if present, else create one.
+          rel_id=$(curl -sf -H "$AUTH" "$API/releases/tags/$TAG" | jq -r '.id // empty' || true)
+          if [ -z "$rel_id" ]; then
+            rel_id=$(curl -sf -H "$AUTH" -H "Content-Type: application/json" \
+              -X POST "$API/releases" \
+              -d "$(jq -n --arg t "$TAG" '{tag_name:$t, name:$t, body:("Release "+$t), draft:false, prerelease:false}')" \
+              | jq -r '.id')
+            echo "Created release $TAG (id=$rel_id)"
+          else
+            echo "Reusing existing release $TAG (id=$rel_id)"
+          fi
+
+          # Drop any existing asset of the same name so a re-run uploads fresh.
+          for aid in $(curl -sf -H "$AUTH" "$API/releases/$rel_id/assets" \
+              | jq -r '.[] | select(.name=="oidc-rbac.zip") | .id'); do
+            echo "Deleting stale asset id=$aid"
+            curl -sf -H "$AUTH" -X DELETE "$API/releases/$rel_id/assets/$aid"
+          done
+
+          curl -sf -H "$AUTH" \
+            -F "attachment=@oidc-rbac.zip;type=application/zip" \
+            "$API/releases/$rel_id/assets?name=oidc-rbac.zip" > /dev/null
+          echo "Uploaded oidc-rbac.zip to release $TAG"
 
       - name: Verify all manifest sourceUrls are reachable
         run: |
           # Guard against stale entries (deleted/renamed releases) silently
           # poisoning the manifest. Fail the job before we commit if any
           # listed asset 404s — including the one we just published, which
-          # catches GitHub's release-asset propagation lag.
+          # catches release-asset propagation lag.
           fail=0
           for url in $(jq -r '.[0].versions[].sourceUrl' manifest.json); do
             for attempt in 1 2 3; do
@@ -150,10 +213,11 @@ jobs:
         # manifest.json lives on its own orphan `manifest` branch so the release
         # workflow doesn't churn main. The branch contains only manifest.json
         # (no source, no history from main). Jellyfin consumers point at the
-        # raw URL on the `manifest` branch.
+        # raw URL on the `manifest` branch, e.g.
+        #   ${{ github.server_url }}/${{ github.repository }}/raw/branch/manifest/manifest.json
         run: |
-          git config user.name "github-actions[bot]"
-          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git config user.name "forgejo-actions[bot]"
+          git config user.email "forgejo-actions[bot]@noreply.${{ github.server_url }}"
           cp manifest.json /tmp/manifest.json
 
           if git ls-remote --exit-code --heads origin manifest >/dev/null 2>&1; then
