@@ -1,4 +1,4 @@
-# Authentik + Jellyfin OIDC RBAC Setup
+# Authentik + Jellyfin OIDC SSO Setup
 
 ## Overview
 
@@ -137,7 +137,7 @@ docker compose restart jellyfin
 
 ### 3.2 Plugin Configuration
 
-Go to **Jellyfin Admin Dashboard > Plugins > OIDC RBAC**
+Go to **Jellyfin Admin Dashboard > Plugins > OIDC SSO**
 
 #### Providers Tab
 

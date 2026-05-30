@@ -108,16 +108,16 @@ public static class PermissionResolver
         var isAdmin = Resolve(merged.IsAdmin, entSet.IsAdmin, deny?.IsAdmin);
         // Entitlement-only permissions (no parallel field in RoleMapping). grant=false always.
         var isDisabled = Resolve(false, entSet.IsDisabled, false);
-        var isHidden = Resolve(false, entSet.IsHidden, false);
+        var isHidden = Resolve(merged.IsHidden, entSet.IsHidden, deny?.IsHidden);
         var syncTranscode = Resolve(false, entSet.EnableSyncTranscoding, false);
         var forceRemoteTranscode = Resolve(false, entSet.ForceRemoteSourceTranscoding, false);
-        var remux = Resolve(false, entSet.EnablePlaybackRemuxing, false);
+        var remux = Resolve(merged.EnablePlaybackRemuxing, entSet.EnablePlaybackRemuxing, deny?.EnablePlaybackRemuxing);
         var conversion = Resolve(false, entSet.EnableMediaConversion, false);
         var lyric = Resolve(false, entSet.EnableLyricManagement, false);
         var allChannels = Resolve(false, entSet.EnableAllChannels, false);
         var allDevices = Resolve(false, entSet.EnableAllDevices, false);
-        var sharedDevice = Resolve(false, entSet.EnableSharedDeviceControl, false);
-        var remoteControl = Resolve(false, entSet.EnableRemoteControlOfOtherUsers, false);
+        var sharedDevice = Resolve(merged.EnableSharedDeviceControl, entSet.EnableSharedDeviceControl, deny?.EnableSharedDeviceControl);
+        var remoteControl = Resolve(merged.EnableRemoteControlOfOtherUsers, entSet.EnableRemoteControlOfOtherUsers, deny?.EnableRemoteControlOfOtherUsers);
         var publicSharing = Resolve(false, entSet.EnablePublicSharing, false);
 
         // TASK-08: Playback/Remote/Transcoding are bool? on RoleMapping — null = "no opinion, default true".
@@ -182,6 +182,18 @@ public static class PermissionResolver
             }
         }
 
+        // MaxActiveSessions merge: 0 (unlimited, Jellyfin convention) trumps any numeric cap;
+        // otherwise the largest cap wins (most permissive across matched grants and entitlements).
+        int? maxSessions = null;
+        if (merged.MaxActiveSessions == 0 || entSet.MaxActiveSessions == 0)
+        {
+            maxSessions = 0;
+        }
+        else if (merged.MaxActiveSessions.HasValue || entSet.MaxActiveSessions.HasValue)
+        {
+            maxSessions = Math.Max(merged.MaxActiveSessions ?? 0, entSet.MaxActiveSessions ?? 0);
+        }
+
         int? maxRating = null;
         bool clearRating = entSet.ClearMaxParentalRating;
         if (!clearRating &&
@@ -223,7 +235,7 @@ public static class PermissionResolver
             ClearMaxParentalRatingSub: entSet.ClearMaxParentalRatingSub,
             RemoteClientBitrateLimit: entSet.RemoteClientBitrateLimit,
             ClearRemoteClientBitrateLimit: entSet.ClearRemoteClientBitrateLimit,
-            MaxActiveSessions: entSet.MaxActiveSessions,
+            MaxActiveSessions: maxSessions,
             LoginAttemptsBeforeLockout: entSet.LoginAttemptsBeforeLockout,
             ClearLoginAttemptsBeforeLockout: entSet.ClearLoginAttemptsBeforeLockout,
             MatchedGrantMappings: grantMappings.Select(m => m.RoleName).ToArray(),
@@ -262,6 +274,16 @@ public static class PermissionResolver
         EnableDownload = mappings.Any(m => m.EnableDownload),
         EnableSyncplay = mappings.Any(m => m.EnableSyncplay || m.EnableSyncplayGroupCreation),
         EnableSyncplayGroupCreation = mappings.Any(m => m.EnableSyncplayGroupCreation),
+        IsHidden = mappings.Any(m => m.IsHidden),
+        EnablePlaybackRemuxing = mappings.Any(m => m.EnablePlaybackRemuxing),
+        EnableRemoteControlOfOtherUsers = mappings.Any(m => m.EnableRemoteControlOfOtherUsers),
+        EnableSharedDeviceControl = mappings.Any(m => m.EnableSharedDeviceControl),
+        // 0 means unlimited (Jellyfin convention) and wins over any cap; otherwise take the largest.
+        MaxActiveSessions = mappings.Any(m => m.MaxActiveSessions == 0)
+            ? 0
+            : (mappings.Any(m => m.MaxActiveSessions.HasValue)
+                ? mappings.Where(m => m.MaxActiveSessions.HasValue).Max(m => m.MaxActiveSessions!.Value)
+                : (int?)null),
         MaxParentalRating = mappings.Any(m => m.MaxParentalRating.HasValue)
             ? mappings.Where(m => m.MaxParentalRating.HasValue).Max(m => m.MaxParentalRating!.Value)
             : (int?)null,

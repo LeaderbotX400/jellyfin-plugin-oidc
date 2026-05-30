@@ -31,7 +31,7 @@ public class OidcPlugin : BasePlugin<PluginConfiguration>, IHasWebPages
 
     public static OidcPlugin? Instance { get; private set; }
 
-    public override string Name => "OIDC RBAC";
+    public override string Name => "OIDC SSO";
 
     public override Guid Id => Guid.Parse("d4e5f6a7-b8c9-0d1e-2f3a-4b5c6d7e8f90");
 
@@ -94,7 +94,7 @@ public class OidcPlugin : BasePlugin<PluginConfiguration>, IHasWebPages
         foreach (var role in migrated)
         {
             _log.LogWarning(
-                "OIDC RBAC migration (v0.1.3): deny mapping '{Role}' had legacy default-true values for " +
+                "OIDC SSO migration (v0.1.3): deny mapping '{Role}' had legacy default-true values for " +
                 "EnableMediaPlayback / EnableRemoteAccess / EnableTranscoding. " +
                 "These have been cleared to null (no-op for deny). " +
                 "Please review your deny mappings in the admin UI and explicitly enable the " +

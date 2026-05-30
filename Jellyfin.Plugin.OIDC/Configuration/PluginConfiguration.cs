@@ -55,6 +55,11 @@ public static class ConfigMasking
                 EnableDownload = m.EnableDownload,
                 EnableSyncplay = m.EnableSyncplay,
                 EnableSyncplayGroupCreation = m.EnableSyncplayGroupCreation,
+                IsHidden = m.IsHidden,
+                EnablePlaybackRemuxing = m.EnablePlaybackRemuxing,
+                EnableRemoteControlOfOtherUsers = m.EnableRemoteControlOfOtherUsers,
+                EnableSharedDeviceControl = m.EnableSharedDeviceControl,
+                MaxActiveSessions = m.MaxActiveSessions,
                 MaxParentalRating = m.MaxParentalRating,
                 Priority = m.Priority
             }).ToList(),
@@ -387,6 +392,25 @@ public class RoleMapping
 
     /// <summary>Allow creating SyncPlay groups (implies EnableSyncplay).</summary>
     public bool EnableSyncplayGroupCreation { get; set; }
+
+    /// <summary>Hide the user from the login screen's user-picker list.</summary>
+    public bool IsHidden { get; set; }
+
+    /// <summary>Allow video playback that requires conversion without re-encoding (remuxing).</summary>
+    public bool EnablePlaybackRemuxing { get; set; }
+
+    /// <summary>Allow remote control of other users' sessions.</summary>
+    public bool EnableRemoteControlOfOtherUsers { get; set; }
+
+    /// <summary>Allow remote control of shared devices (e.g. DLNA endpoints, public displays).</summary>
+    public bool EnableSharedDeviceControl { get; set; }
+
+    /// <summary>
+    /// Maximum number of simultaneous sessions. Null = no opinion from this mapping;
+    /// 0 = unlimited (Jellyfin convention); positive N = cap at N. When merging multiple matched
+    /// grants, 0 (unlimited) wins; otherwise the largest cap wins (most permissive).
+    /// </summary>
+    public int? MaxActiveSessions { get; set; }
 
     public int? MaxParentalRating { get; set; }
 

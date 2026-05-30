@@ -99,7 +99,7 @@ public class RbacService
                     "OIDC plugin: last-admin demotion blocked",
                     "OidcLastAdminBlocked",
                     userId,
-                    $"OIDC RBAC would have removed administrator rights from {user.Username} but they are the last admin. Set AllowLastAdminDemotion=true in plugin config to override.",
+                    $"OIDC SSO would have removed administrator rights from {user.Username} but they are the last admin. Set AllowLastAdminDemotion=true in plugin config to override.",
                     Microsoft.Extensions.Logging.LogLevel.Warning).ConfigureAwait(false);
                 // Preserve the admin bit; all other permission fields are applied normally below.
                 effectiveIsAdmin = true;
@@ -131,7 +131,7 @@ public class RbacService
 
         // Activity log: user-friendly summary, no raw claim contents (other admins read this).
         await LogActivityAsync(
-            "OIDC RBAC permissions updated",
+            "OIDC SSO permissions updated",
             "OidcPermissionsChanged",
             userId,
             $"Admin: {adminStr}. Matched grants: {preview.MatchedGrantMappings.Length}, denies: {preview.MatchedDenyMappings.Length}.",

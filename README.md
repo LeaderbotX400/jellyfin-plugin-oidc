@@ -1,4 +1,4 @@
-# Jellyfin OIDC RBAC Plugin
+# Jellyfin OIDC SSO Plugin
 
 A Jellyfin plugin providing **OpenID Connect authentication** with **role-based library access control**.
 
@@ -27,9 +27,9 @@ https://raw.githubusercontent.com/LeaderbotX400/jellyfin-plugin-oidc/manifest/ma
 ### From the Jellyfin Plugin Catalog
 
 1. Go to **Admin Dashboard > Plugins > Repositories**
-2. Click **Add repository** and paste the URL above (Repository Name: `OIDC RBAC`)
+2. Click **Add repository** and paste the URL above (Repository Name: `OIDC SSO`)
 3. Go to **Catalog > Authentication**
-4. Install **OIDC RBAC**
+4. Install **OIDC SSO**
 5. Restart Jellyfin
 
 ### Manual Installation
@@ -49,7 +49,7 @@ sudo systemctl restart jellyfin
 
 ### 1. Configure a Provider
 
-Go to **Admin Dashboard > Plugins > OIDC RBAC > Providers tab**
+Go to **Admin Dashboard > Plugins > OIDC SSO > Providers tab**
 
 | Field              | Example (Authentik)                                        |
 |--------------------|------------------------------------------------------------|
@@ -126,6 +126,9 @@ Browser                    Jellyfin Plugin              Identity Provider
 7. Plugin issues a Jellyfin session token and redirects to the dashboard
 
 ## RBAC Details
+
+> Full reference of every role-mapping field, every `jellyfin:*` entitlement
+> token, merge rules, and worked examples: **[docs/rbac-permissions.md](docs/rbac-permissions.md)**.
 
 ### Role Merging
 

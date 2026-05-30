@@ -273,6 +273,19 @@ function renderRoleMappings(view) {
                     'Participate in synchronized group playback sessions.') +
                 chkDesc('role_syncplayhost_' + idx, 'Host SyncPlay', m.EnableSyncplayGroupCreation,
                     'Create SyncPlay groups. Implies join.') +
+                chkDesc('role_remux_' + idx, 'Allow video remuxing', m.EnablePlaybackRemuxing,
+                    'Permit video playback that requires container conversion without re-encoding.') +
+                chkDesc('role_hidden_' + idx, 'Hide from login screen', m.IsHidden,
+                    'Omit this user from the login-screen user picker.') +
+                chkDesc('role_remotectl_' + idx, 'Remote-control other users', m.EnableRemoteControlOfOtherUsers,
+                    'Cast to / take over playback on other users’ active sessions.') +
+                chkDesc('role_sharedctl_' + idx, 'Remote-control shared devices', m.EnableSharedDeviceControl,
+                    'Control shared/public playback devices (DLNA endpoints, public displays).') +
+                '</div>' +
+                '<div class="inputContainer" style="max-width:20em;margin-top:0.8em;">' +
+                    '<input is="emby-input" type="number" min="0" id="role_maxsessions_' + idx + '"' +
+                    ' label="Max simultaneous sessions (0 = unlimited, empty = no opinion)"' +
+                    ' value="' + (m.MaxActiveSessions != null ? m.MaxActiveSessions : '') + '" />' +
                 '</div>'
             ) +
             subsection('Libraries',
@@ -479,6 +492,7 @@ function collectRoleMappings(view) {
         var libIds = [];
         chips.forEach(function (c) { libIds.push(c.getAttribute('data-lib-id')); });
         var mr = gval(view, 'role_maxrating_' + idx);
+        var ms = gval(view, 'role_maxsessions_' + idx);
         result.push({
             RoleName: gval(view, 'role_name_' + idx),
             ProviderId: gval(view, 'role_provider_' + idx),
@@ -498,6 +512,11 @@ function collectRoleMappings(view) {
             EnableDownload: gchk(view, 'role_download_' + idx),
             EnableSyncplay: gchk(view, 'role_syncplay_' + idx),
             EnableSyncplayGroupCreation: gchk(view, 'role_syncplayhost_' + idx),
+            IsHidden: gchk(view, 'role_hidden_' + idx),
+            EnablePlaybackRemuxing: gchk(view, 'role_remux_' + idx),
+            EnableRemoteControlOfOtherUsers: gchk(view, 'role_remotectl_' + idx),
+            EnableSharedDeviceControl: gchk(view, 'role_sharedctl_' + idx),
+            MaxActiveSessions: ms === '' ? null : (parseInt(ms, 10) >= 0 ? parseInt(ms, 10) : null),
             MaxParentalRating: mr ? parseInt(mr) : null
         });
     });
@@ -557,7 +576,7 @@ export default function (view) {
             Dashboard.hideLoadingMsg();
         }).catch(function (err) {
             Dashboard.hideLoadingMsg();
-            console.error('OIDC RBAC: failed to load config', err);
+            console.error('OIDC SSO: failed to load config', err);
         });
     }
 
@@ -613,6 +632,9 @@ export default function (view) {
             EnableContentDeletion: false, EnableCollectionManagement: false,
             EnableSubtitleManagement: false, EnableDownload: false,
             EnableSyncplay: false, EnableSyncplayGroupCreation: false,
+            IsHidden: false, EnablePlaybackRemuxing: false,
+            EnableRemoteControlOfOtherUsers: false, EnableSharedDeviceControl: false,
+            MaxActiveSessions: null,
             MaxParentalRating: null
         });
         renderRoleMappings(view);
@@ -775,7 +797,7 @@ export default function (view) {
         var idx = e.target.id.substring('role_deny_'.length);
         var perms = ['admin', 'alllibs', 'livetv', 'livetvmgmt', 'playback', 'remote',
                      'transcode', 'delete', 'collections', 'subtitles', 'download',
-                     'syncplay', 'syncplayhost'];
+                     'syncplay', 'syncplayhost', 'remux', 'hidden', 'remotectl', 'sharedctl'];
         perms.forEach(function (p) {
             var cb = view.querySelector('#role_' + p + '_' + idx);
             if (cb) cb.checked = false;
