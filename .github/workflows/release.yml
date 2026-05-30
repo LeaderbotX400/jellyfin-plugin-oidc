@@ -167,10 +167,19 @@ jobs:
         # actually wanted.
         uses: https://code.forgejo.org/actions/forgejo-release@v2.12.1
         with:
+          # Pass url explicitly: the action's default is env.FORGEJO_SERVER_URL,
+          # and if the runner sets that to http:// (or leaves it empty),
+          # Forgejo's HSTS sends a 307 to https://. The action's internal curl
+          # does not use -L, so the body comes back empty, jq returns null for
+          # .commit.sha, and the tag-SHA-match check fails with a misleading
+          # "tag SHA does not match" error. github.server_url is populated by
+          # Forgejo Actions with the canonical instance URL.
+          url: ${{ github.server_url }}
           direction: upload
           release-dir: release-staging
           override: true
           token: ${{ secrets.GITHUB_TOKEN }}
+          verbose: "true"
 
       - name: Verify all manifest sourceUrls are reachable
         run: |
