@@ -7,8 +7,8 @@ name: Build & Release
 #   - Actions are referenced by full https://github.com/... URLs so the original
 #     SHA pins still apply (Forgejo's default action registry, code.forgejo.org,
 #     does not mirror setup-dotnet).
-#   - The GitHub-only softprops/action-gh-release step is replaced by curl calls
-#     against Forgejo's Gitea-compatible release API.
+#   - The GitHub-only softprops/action-gh-release step is replaced by
+#     actions/forgejo-release (Forgejo's first-party release action).
 #   - Download/server URLs use ${{ github.server_url }}, which Forgejo populates
 #     with the instance URL, instead of a literal https://github.com.
 #
@@ -89,7 +89,12 @@ jobs:
             -p:FileVersion=$VERSION
 
       - name: Package
-        run: cd dist && zip ../oidc-rbac.zip -- *.dll meta.json
+        # Stage the zip into release-staging/ because actions/forgejo-release uploads
+        # everything in a directory (no per-file input). Keep the artifact out of
+        # dist/ so we don't accidentally upload the unzipped publish output.
+        run: |
+          mkdir -p release-staging
+          cd dist && zip ../release-staging/oidc-rbac.zip -- *.dll meta.json
 
       - name: Compute checksums
         run: |
@@ -101,8 +106,8 @@ jobs:
           # used for security authentication.
           #
           # SHA-256 is recorded alongside for informational purposes and future use.
-          MD5_CHECKSUM=$(md5sum oidc-rbac.zip | cut -d' ' -f1)
-          SHA256_CHECKSUM=$(sha256sum oidc-rbac.zip | cut -d' ' -f1)
+          MD5_CHECKSUM=$(md5sum release-staging/oidc-rbac.zip | cut -d' ' -f1)
+          SHA256_CHECKSUM=$(sha256sum release-staging/oidc-rbac.zip | cut -d' ' -f1)
           echo "md5_checksum=${MD5_CHECKSUM}" >> "$GITHUB_OUTPUT"
           echo "sha256_checksum=${SHA256_CHECKSUM}" >> "$GITHUB_OUTPUT"
           echo "MD5 (Jellyfin manifest): ${MD5_CHECKSUM}"
@@ -149,85 +154,23 @@ jobs:
           mv manifest.json.new manifest.json
 
       - name: Create release
-        # Replaces softprops/action-gh-release (GitHub Releases API) with calls to
-        # Forgejo's Gitea-compatible release API. Idempotent: on a re-tag/re-run it
-        # reuses the existing release and overwrites the asset, mirroring the
-        # version-dedupe in the manifest step. Forgejo does not auto-generate
-        # release notes, so the body is a simple changelog line.
+        # actions/forgejo-release uploads every file under release-dir (no per-file
+        # input), so the Package step stages oidc-rbac.zip into release-staging/.
+        # override: true makes re-runs idempotent — the release and asset get
+        # overwritten instead of failing with "release already exists".
         #
-        # All API calls go through api_json() so we (a) capture the HTTP status,
-        # (b) print the response body on failure, and (c) validate that 2xx
-        # responses are actually JSON before handing them to jq. Without this,
-        # a proxy returning an HTML/plain-text body (even with HTTP 200) shows
-        # up only as a cryptic `jq: parse error: Invalid numeric literal` and
-        # an exit-code-4 step failure.
-        run: |
-          set -euo pipefail
-          API="${{ github.server_url }}/api/v1/repos/${{ github.repository }}"
-          AUTH="Authorization: token ${{ secrets.GITHUB_TOKEN }}"
-          TAG="${GITHUB_REF_NAME}"
-
-          # api_json METHOD URL [curl args...]
-          #   stdout: response body (only on 2xx + valid JSON)
-          #   exit:   0 on success, 1 on transport error, 2 on non-2xx, 3 on non-JSON body
-          #   404 is treated as success-with-empty-output so callers can probe existence.
-          api_json() {
-            local method=$1 url=$2; shift 2
-            local tmp status
-            tmp=$(mktemp)
-            status=$(curl -sS -o "$tmp" -w '%{http_code}' \
-              -H "$AUTH" -H "Accept: application/json" \
-              -X "$method" "$url" "$@") || {
-                echo "::error::curl transport failure for $method $url" >&2
-                cat "$tmp" >&2 || true
-                rm -f "$tmp"
-                return 1
-              }
-            if [ "$status" = "404" ]; then
-              rm -f "$tmp"
-              return 0
-            fi
-            if [ "$status" -lt 200 ] || [ "$status" -ge 300 ]; then
-              echo "::error::HTTP $status from $method $url" >&2
-              cat "$tmp" >&2
-              rm -f "$tmp"
-              return 2
-            fi
-            if ! jq -e . <"$tmp" >/dev/null 2>&1; then
-              echo "::error::Non-JSON 2xx body from $method $url" >&2
-              cat "$tmp" >&2
-              rm -f "$tmp"
-              return 3
-            fi
-            cat "$tmp"
-            rm -f "$tmp"
-          }
-
-          # Reuse an existing release for this tag if present, else create one.
-          rel_id=$(api_json GET "$API/releases/tags/$TAG" | jq -r '.id // empty')
-          if [ -z "$rel_id" ]; then
-            body=$(jq -n --arg t "$TAG" '{tag_name:$t, name:$t, body:("Release "+$t), draft:false, prerelease:false}')
-            rel_id=$(api_json POST "$API/releases" \
-              -H "Content-Type: application/json" --data-binary "$body" \
-              | jq -r '.id')
-            echo "Created release $TAG (id=$rel_id)"
-          else
-            echo "Reusing existing release $TAG (id=$rel_id)"
-          fi
-
-          # Drop any existing asset of the same name so a re-run uploads fresh.
-          for aid in $(api_json GET "$API/releases/$rel_id/assets" \
-              | jq -r '.[] | select(.name=="oidc-rbac.zip") | .id'); do
-            echo "Deleting stale asset id=$aid"
-            api_json DELETE "$API/releases/$rel_id/assets/$aid" >/dev/null
-          done
-
-          # Asset upload returns the asset metadata as JSON; route through api_json
-          # so a non-JSON/HTML response surfaces with a body instead of breaking
-          # the next jq downstream.
-          api_json POST "$API/releases/$rel_id/assets?name=oidc-rbac.zip" \
-            -F "attachment=@oidc-rbac.zip;type=application/zip" >/dev/null
-          echo "Uploaded oidc-rbac.zip to release $TAG"
+        # NOTE: `tag` defaults to forge.ref_name. On a tag-push this is the tag
+        # (correct). On workflow_dispatch from main this would be "main", which
+        # would publish to a release named "main". The existing version-extraction
+        # step (`${GITHUB_REF_NAME#v}`) is already broken for workflow_dispatch in
+        # the same way; fix both together if/when dispatch-based releases are
+        # actually wanted.
+        uses: https://code.forgejo.org/actions/forgejo-release@v2.12.1
+        with:
+          direction: upload
+          release-dir: release-staging
+          override: true
+          token: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Verify all manifest sourceUrls are reachable
         run: |
