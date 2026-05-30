@@ -236,11 +236,20 @@ jobs:
             exit 0
           fi
           git commit -m "Update manifest.json for ${GITHUB_REF_NAME}"
+          # Push directly to the canonical URL with the token inline.
+          # Background: actions/checkout sets `origin` to https://git.s10y.ca/...
+          # (the runner's github.server_url), which 302-redirects to
+          # https://forgejo.singerfamily.ca. Git follows the redirect for fetches
+          # but STRIPS the Authorization header on cross-host redirect, so a
+          # `git push origin` prompts for a username and fails. Bypass by pushing
+          # to the canonical URL with the token embedded — the runner masks
+          # secrets.GITHUB_TOKEN in logs.
+          PUSH_URL="https://x-access-token:${{ secrets.GITHUB_TOKEN }}@forgejo.singerfamily.ca/${{ github.repository }}"
           # Retry to survive concurrent pushes during the build.
           # No --force: this job is the only manifest writer. If a concurrent push
           # exists, rebase + retry cleanly; do NOT swallow rebase failures.
           for i in 1 2 3; do
-            if git push origin manifest; then
+            if git push "$PUSH_URL" manifest; then
               exit 0
             fi
             echo "Push failed, rebasing and retrying ($i/3)..."
