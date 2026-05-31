@@ -35,6 +35,8 @@ public static class ConfigMasking
             AutoCreateUsers = config.AutoCreateUsers,
             DefaultRoleName = config.DefaultRoleName,
             VerboseClaimLogging = config.VerboseClaimLogging,
+            TrustForwardedHeaders = config.TrustForwardedHeaders,
+            TrustedProxyCidrs = new List<string>(config.TrustedProxyCidrs),
             RoleMappings = config.RoleMappings.Select(m => new RoleMapping
             {
                 RoleName = m.RoleName,
@@ -102,7 +104,9 @@ public static class ConfigMasking
                     {
                         FromValue = t.FromValue,
                         ToValue = t.ToValue
-                    }).ToList()
+                    }).ToList(),
+                    RequiredAmrValues = new List<string>(p.RequiredAmrValues),
+                    RequiredAcrValues = new List<string>(p.RequiredAcrValues)
                 };
                 MaskSecretProperties(copy);
                 return copy;
