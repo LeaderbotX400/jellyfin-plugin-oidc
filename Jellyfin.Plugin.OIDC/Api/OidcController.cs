@@ -548,6 +548,9 @@ public class OidcController : ControllerBase
     public ActionResult GetProviders()
     {
         var config = _configProvider.GetConfiguration();
+        var trustedProxies = ClientIpResolver.ParseCidrs(config.TrustedProxyCidrs, _logger);
+        var scheme = ClientIpResolver.ResolveScheme(HttpContext, config.TrustForwardedHeaders, trustedProxies);
+        var host = ClientIpResolver.ResolveHost(HttpContext, config.TrustForwardedHeaders, trustedProxies);
         var providers = config.Providers
             .Where(p => p.Enabled)
             .Select(p => new
@@ -556,7 +559,7 @@ public class OidcController : ControllerBase
                 p.DisplayName,
                 p.ButtonColor,
                 p.ButtonIcon,
-                StartUrl = $"{Request.Scheme}://{Request.Host}/sso/OIDC/Start/{p.ProviderId}"
+                StartUrl = $"{scheme}://{host}/sso/OIDC/Start/{p.ProviderId}"
             });
 
         return Ok(providers);
@@ -714,7 +717,11 @@ public class OidcController : ControllerBase
 
     private string BuildCallbackUri(string providerId)
     {
-        return $"{Request.Scheme}://{Request.Host}/sso/OIDC/Callback/{providerId}";
+        var cfg = _configProvider.GetConfiguration();
+        var trustedProxies = ClientIpResolver.ParseCidrs(cfg.TrustedProxyCidrs, _logger);
+        var scheme = ClientIpResolver.ResolveScheme(HttpContext, cfg.TrustForwardedHeaders, trustedProxies);
+        var host = ClientIpResolver.ResolveHost(HttpContext, cfg.TrustForwardedHeaders, trustedProxies);
+        return $"{scheme}://{host}/sso/OIDC/Callback/{providerId}";
     }
 
     // Validates the id_token's amr / acr claims against per-provider requirements.
