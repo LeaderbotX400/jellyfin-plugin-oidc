@@ -21,11 +21,6 @@ name: Build & Release
 # asset without auth.
 
 on:
-  workflow_dispatch:
-    inputs:
-      version:
-        description: "Version to release"
-        required: true
   push:
     tags:
       - "v*"
@@ -40,7 +35,7 @@ jobs:
     permissions:
       contents: write  # needed to create the release and push the manifest update
     steps:
-      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # v4.3.1
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # v6.0.2
 
       - name: Ensure CLI tooling (zip, jq)
         # The default Forgejo runner image (node:bookworm) ships curl/git/md5sum
@@ -220,7 +215,7 @@ jobs:
         #   ${{ github.server_url }}/${{ github.repository }}/raw/branch/manifest/manifest.json
         run: |
           git config user.name "forgejo-actions[bot]"
-          git config user.email "forgejo-actions[bot]@noreply.forgejo.singerfamily.ca"
+          git config user.email "forgejo-actions[bot]@users.noreply.fj.s10y.ca"
           cp manifest.json /tmp/manifest.json
 
           if git ls-remote --exit-code --heads origin manifest >/dev/null 2>&1; then
