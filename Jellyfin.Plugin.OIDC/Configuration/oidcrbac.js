@@ -182,6 +182,12 @@ function renderProviders(view) {
                 fldDesc('Allowed Signing Algorithms', 'text', 'prov_algs_' + idx,
                     (p.AllowedSigningAlgorithms || ['RS256','RS384','RS512','ES256','ES384','ES512','PS256','PS384','PS512']).join(','),
                     'Comma-separated. Adding HS256/HS384/HS512 is DANGEROUS (relies on client_secret strength).', true) +
+                fldDesc('Required AMR Values', 'text', 'prov_amr_' + idx,
+                    (p.RequiredAmrValues || []).join(','),
+                    'Comma-separated Authentication Method References (e.g. mfa,otp). Leave empty to allow any AMR.', true) +
+                fldDesc('Required ACR Values', 'text', 'prov_acr_' + idx,
+                    (p.RequiredAcrValues || []).join(','),
+                    'Comma-separated Authentication Context Class References (e.g. urn:mace:incommon:iap:silver). Leave empty to allow any ACR.', true) +
                 chk('prov_allowinsecure_' + idx, 'Allow insecure authority (dev/test only)', p.AllowInsecureAuthority) +
                 '<div class="fieldDescription"><strong>DANGER:</strong> HTTPS is required for Authority / JWKS / token endpoints. The "Allow insecure" toggle relaxes this for localhost only and must never be enabled in production.</div>'
             ) +
@@ -479,6 +485,10 @@ function collectProviders(view) {
             RoleTransforms: collectTransforms(view.querySelector('#prov_transforms_' + idx)),
             AllowInsecureAuthority: gchk(view, 'prov_allowinsecure_' + idx),
             AllowedSigningAlgorithms: gval(view, 'prov_algs_' + idx)
+                .split(',').map(function (s) { return s.trim(); }).filter(function (s) { return s.length > 0; }),
+            RequiredAmrValues: gval(view, 'prov_amr_' + idx)
+                .split(',').map(function (s) { return s.trim(); }).filter(function (s) { return s.length > 0; }),
+            RequiredAcrValues: gval(view, 'prov_acr_' + idx)
                 .split(',').map(function (s) { return s.trim(); }).filter(function (s) { return s.length > 0; })
         });
     });
@@ -573,6 +583,10 @@ export default function (view) {
             if (alEl) alEl.checked = cfg.AllowLastAdminDemotion === true;
             var vclEl = view.querySelector('#verboseClaimLogging');
             if (vclEl) vclEl.checked = cfg.VerboseClaimLogging === true;
+            var tfEl = view.querySelector('#cfg_trustforwarded');
+            if (tfEl) tfEl.checked = cfg.TrustForwardedHeaders === true;
+            var tcEl = view.querySelector('#cfg_trustedcidrs');
+            if (tcEl) tcEl.value = (cfg.TrustedProxyCidrs || []).join(', ');
             Dashboard.hideLoadingMsg();
         }).catch(function (err) {
             Dashboard.hideLoadingMsg();
@@ -611,7 +625,9 @@ export default function (view) {
             AutoLinkByVerifiedEmail: false, EnforceSsoOnLink: false,
             RoleTransforms: [],
             AllowInsecureAuthority: false,
-            AllowedSigningAlgorithms: ['RS256','RS384','RS512','ES256','ES384','ES512','PS256','PS384','PS512']
+            AllowedSigningAlgorithms: ['RS256','RS384','RS512','ES256','ES384','ES512','PS256','PS384','PS512'],
+            RequiredAmrValues: [],
+            RequiredAcrValues: []
         });
         renderProviders(view);
     });
@@ -676,6 +692,9 @@ export default function (view) {
         cfg.RbacBehavior = view.querySelector('#rbacBehavior').value || 'EntitlementsAuthoritative';
         cfg.AllowLastAdminDemotion = gchk(view, 'allowLastAdminDemotion');
         cfg.VerboseClaimLogging = gchk(view, 'verboseClaimLogging');
+        cfg.TrustForwardedHeaders = gchk(view, 'cfg_trustforwarded');
+        cfg.TrustedProxyCidrs = gval(view, 'cfg_trustedcidrs')
+            .split(',').map(function (s) { return s.trim(); }).filter(function (s) { return s.length > 0; });
 
         // Client-side provider id check — must match server regex ^[A-Za-z0-9_-]{1,64}$.
         // The server's UpdateConfiguration validates again as the source of truth; this just
