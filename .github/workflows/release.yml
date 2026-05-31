@@ -125,7 +125,7 @@ jobs:
           CHECKSUM="${{ steps.checksums.outputs.md5_checksum }}"
           TIMESTAMP=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
           VERSION="${{ steps.version.outputs.version }}.0"
-          DOWNLOAD_URL="${{ github.server_url }}/${{ github.repository }}/releases/download/${GITHUB_REF_NAME}/oidc-rbac.zip"
+          DOWNLOAD_URL="https://forgejo.singerfamily.ca/${{ github.repository }}/releases/download/${GITHUB_REF_NAME}/oidc-rbac.zip"
 
           # manifest.json lives on its own orphan `manifest` branch so releases
           # don't churn main. Fetch the current manifest from that branch; if the
@@ -135,7 +135,7 @@ jobs:
           else
             echo "No origin/manifest branch yet — seeding empty manifest"
             jq -n '[{
-              guid: "d4e5f6a7-b8c9-0d1e-2f3a-4b5c6d7e8f90",
+              guid: "eea268ef-ea57-4462-91c4-44833ae08510",
               name: "OIDC SSO",
               description: "Advanced OIDC authentication with role-based library access control",
               overview: "OpenID Connect SSO with role-to-library mapping, multi-provider support, and admin UI.",
@@ -220,7 +220,7 @@ jobs:
         #   ${{ github.server_url }}/${{ github.repository }}/raw/branch/manifest/manifest.json
         run: |
           git config user.name "forgejo-actions[bot]"
-          git config user.email "forgejo-actions[bot]@noreply.${{ github.server_url }}"
+          git config user.email "forgejo-actions[bot]@noreply.forgejo.singerfamily.ca"
           cp manifest.json /tmp/manifest.json
 
           if git ls-remote --exit-code --heads origin manifest >/dev/null 2>&1; then

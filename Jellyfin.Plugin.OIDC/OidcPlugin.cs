@@ -33,7 +33,7 @@ public class OidcPlugin : BasePlugin<PluginConfiguration>, IHasWebPages
 
     public override string Name => "OIDC SSO";
 
-    public override Guid Id => Guid.Parse("d4e5f6a7-b8c9-0d1e-2f3a-4b5c6d7e8f90");
+    public override Guid Id => Guid.Parse("eea268ef-ea57-4462-91c4-44833ae08510");
 
     public override string Description => "Advanced OIDC authentication with role-based library access control";
 
