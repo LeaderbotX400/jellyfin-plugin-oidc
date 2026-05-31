@@ -120,6 +120,25 @@
                     </div>
                 </div>
 
+                <div class="oidc-subsection-title">Reverse Proxy</div>
+                <div class="checkboxContainer checkboxContainer-withDescription">
+                    <label>
+                        <input type="checkbox" id="cfg_trustforwarded" is="emby-checkbox" />
+                        <span class="oidc-chk-text">
+                            <span class="oidc-chk-title"><strong>Trust forwarded headers</strong> (X-Forwarded-For / X-Real-IP)</span>
+                            <span class="fieldDescription oidc-chk-desc">Only enable if Jellyfin is behind a reverse proxy. Without an accurate trusted-proxy list, an attacker can spoof X-Forwarded-* headers to bypass the per-IP rate limit.</span>
+                        </span>
+                    </label>
+                </div>
+                <div class="inputContainer oidc-grid-full">
+                    <input is="emby-input" type="text" id="cfg_trustedcidrs"
+                           label="Trusted Proxy CIDRs (comma-separated)"
+                           placeholder="10.0.0.0/8, 192.168.0.0/16, ::1/128" />
+                    <div class="fieldDescription">
+                        Comma-separated list of CIDRs whose X-Forwarded-* headers are trusted (e.g. <code>10.0.0.0/8, 192.168.0.0/16, ::1/128</code>). Ignored when "Trust forwarded headers" is off.
+                    </div>
+                </div>
+
                 <div class="oidc-danger-zone">
                     <div class="oidc-danger-title">DANGER ZONE</div>
                     <div class="checkboxContainer checkboxContainer-withDescription">
