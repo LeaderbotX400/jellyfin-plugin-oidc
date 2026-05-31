@@ -7,7 +7,9 @@ using Jellyfin.Plugin.OIDC.Configuration;
 using Jellyfin.Plugin.OIDC.Services;
 using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Mvc;
+using MediaBrowser.Model.Activity;
 using Microsoft.Extensions.Logging.Abstractions;
+using Moq;
 
 namespace Jellyfin.Plugin.OIDC.Integration.Tests;
 
@@ -27,6 +29,8 @@ internal sealed class TestFixture
     public LogoutTokenReplayCache ReplayCache { get; }
     public SamlAssertionReplayCache SamlReplayCache { get; }
     public AuthorizationCodeCache CodeCache { get; }
+    public CallbackRateLimiter RateLimiter { get; }
+    public Mock<IActivityManager> ActivityManagerMock { get; }
 
     public TestFixture(MockIdpFixture idp)
     {
@@ -36,6 +40,7 @@ internal sealed class TestFixture
         var sessionManagerMock = FakeJellyfinFactory.CreateSessionManager();
         var libraryManagerMock = FakeJellyfinFactory.CreateLibraryManager();
         var activityManagerMock = FakeJellyfinFactory.CreateActivityManager();
+        ActivityManagerMock = activityManagerMock;
         var httpFactory = new FakeHttpClientFactory();
 
         OidcUserStore = new OidcUserStore(Path.Combine(Path.GetTempPath(), $"oidc-test-{Guid.NewGuid():N}.json"));
@@ -45,6 +50,7 @@ internal sealed class TestFixture
         ReplayCache = new LogoutTokenReplayCache(NullLogger<LogoutTokenReplayCache>.Instance);
         SamlReplayCache = new SamlAssertionReplayCache(NullLogger<SamlAssertionReplayCache>.Instance);
         CodeCache = new AuthorizationCodeCache(NullLogger<AuthorizationCodeCache>.Instance);
+        RateLimiter = new CallbackRateLimiter(NullLogger<CallbackRateLimiter>.Instance);
 
         RbacService = new RbacService(
             userManagerMock.Object,
@@ -72,6 +78,7 @@ internal sealed class TestFixture
             userManagerMock.Object,
             ConfigProvider,
             CodeCache,
+            RateLimiter,
             NullLogger<OidcController>.Instance);
 
         Controller.ControllerContext = new ControllerContext

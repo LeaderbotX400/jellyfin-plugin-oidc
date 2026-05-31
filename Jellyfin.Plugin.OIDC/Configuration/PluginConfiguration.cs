@@ -329,6 +329,20 @@ public class OidcProviderConfig
     /// MITM on plain HTTP can swap JWKS and forge arbitrary tokens.
     /// </summary>
     public bool AllowInsecureAuthority { get; set; }
+
+    /// <summary>
+    /// Optional. If non-empty, the id_token's <c>amr</c> claim must contain at least one of these
+    /// values or the login is rejected. Use to require the IdP to have performed MFA
+    /// (e.g. <c>["mfa"]</c>, <c>["otp", "hwk"]</c>). Empty = no enforcement.
+    /// See RFC 8176 for standard AMR values.
+    /// </summary>
+    public List<string> RequiredAmrValues { get; set; } = new();
+
+    /// <summary>
+    /// Optional. If non-empty, the id_token's <c>acr</c> claim must equal one of these values
+    /// (case-sensitive, per spec) or the login is rejected. Empty = no enforcement.
+    /// </summary>
+    public List<string> RequiredAcrValues { get; set; } = new();
 }
 
 /// <summary>Maps a raw claim value to a normalized value before role matching.</summary>

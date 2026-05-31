@@ -173,7 +173,16 @@ public class UserSyncService
 
         await _rbacService.ApplyRoleMappingsAsync(user.Id, roles, entitlements, providerId).ConfigureAwait(false);
 
-        _ = weCreatedThisUser; // currently informational; kept for future audit hooks
+        if (weCreatedThisUser)
+        {
+            await _rbacService.LogActivityAsync(
+                $"OIDC user provisioned: {username}",
+                "OidcUserProvisioned",
+                user.Id,
+                $"provider={providerId}",
+                Microsoft.Extensions.Logging.LogLevel.Information).ConfigureAwait(false);
+        }
+
         return user.Id;
     }
 

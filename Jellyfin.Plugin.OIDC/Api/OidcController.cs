@@ -41,6 +41,7 @@ public class OidcController : ControllerBase
     private readonly IUserManager _userManager;
     private readonly IPluginConfigProvider _configProvider;
     private readonly AuthorizationCodeCache _codeCache;
+    private readonly CallbackRateLimiter _rateLimiter;
     private readonly ILogger<OidcController> _logger;
 
     public OidcController(
@@ -55,6 +56,7 @@ public class OidcController : ControllerBase
         IUserManager userManager,
         IPluginConfigProvider configProvider,
         AuthorizationCodeCache codeCache,
+        CallbackRateLimiter rateLimiter,
         ILogger<OidcController> logger)
     {
         _stateManager = stateManager;
@@ -68,6 +70,7 @@ public class OidcController : ControllerBase
         _userManager = userManager;
         _configProvider = configProvider;
         _codeCache = codeCache;
+        _rateLimiter = rateLimiter;
         _logger = logger;
     }
 
@@ -134,6 +137,13 @@ public class OidcController : ControllerBase
     [HttpGet("Callback/{providerId}")]
     public async Task<ActionResult> Callback(string providerId, [FromQuery] string code, [FromQuery] string state)
     {
+        var remoteIp = HttpContext.Connection.RemoteIpAddress;
+        if (_rateLimiter.IsBanned(remoteIp, out var retryAfter))
+        {
+            Response.Headers["Retry-After"] = ((int)retryAfter.TotalSeconds).ToString(System.Globalization.CultureInfo.InvariantCulture);
+            return StatusCode(429, "Too many failed authentication attempts. Try again later.");
+        }
+
         if (string.IsNullOrEmpty(code) || string.IsNullOrEmpty(state))
         {
             var error = HttpContext.Request.Query["error"].FirstOrDefault();
@@ -143,17 +153,29 @@ public class OidcController : ControllerBase
                 "OIDC callback error: {Error} - {Description}",
                 LogRedaction.Sanitize(error),
                 LogRedaction.Sanitize(errorDesc));
+            _rateLimiter.RecordFailure(remoteIp);
             return BadRequest($"Authentication failed: {error ?? "missing code or state"}");
         }
 
         var oidcState = _stateManager.ConsumeState(state);
         if (oidcState == null)
         {
+            await _rbacService.LogActivityAsync(
+                "OIDC callback rejected: invalid or expired state",
+                "OidcLoginFailure", Guid.Empty, $"provider={providerId}",
+                Microsoft.Extensions.Logging.LogLevel.Warning).ConfigureAwait(false);
+            _rateLimiter.RecordFailure(remoteIp);
             return BadRequest("Invalid or expired authentication state. Please try again.");
         }
 
         if (!string.Equals(oidcState.ProviderId, providerId, StringComparison.OrdinalIgnoreCase))
         {
+            await _rbacService.LogActivityAsync(
+                "OIDC callback rejected: provider mismatch",
+                "OidcLoginFailure", Guid.Empty,
+                $"stateProvider={oidcState.ProviderId} urlProvider={providerId}",
+                Microsoft.Extensions.Logging.LogLevel.Warning).ConfigureAwait(false);
+            _rateLimiter.RecordFailure(remoteIp);
             return BadRequest("Provider mismatch");
         }
 
@@ -163,6 +185,11 @@ public class OidcController : ControllerBase
         if (!_codeCache.TryConsume(code, providerId))
         {
             _logger.LogWarning("OIDC callback rejected: authorization code already used for provider {Provider}", providerId);
+            await _rbacService.LogActivityAsync(
+                "OIDC callback rejected: authorization code replay",
+                "OidcLoginFailure", Guid.Empty, $"provider={providerId}",
+                Microsoft.Extensions.Logging.LogLevel.Warning).ConfigureAwait(false);
+            _rateLimiter.RecordFailure(remoteIp);
             return BadRequest("Authorization code has already been used");
         }
 
@@ -171,6 +198,11 @@ public class OidcController : ControllerBase
         if (!VerifyAndClearCsrfBindingCookie(providerId, oidcState))
         {
             _logger.LogWarning("OIDC callback rejected: missing or invalid CSRF binding cookie for provider {Provider}", providerId);
+            await _rbacService.LogActivityAsync(
+                "OIDC callback rejected: CSRF binding cookie missing or invalid",
+                "OidcLoginFailure", Guid.Empty, $"provider={providerId}",
+                Microsoft.Extensions.Logging.LogLevel.Warning).ConfigureAwait(false);
+            _rateLimiter.RecordFailure(remoteIp);
             return BadRequest("Authentication session not initiated by this browser. Please start sign-in again.");
         }
 
@@ -259,6 +291,7 @@ public class OidcController : ControllerBase
                 Guid.Empty,
                 ex.Message,
                 Microsoft.Extensions.Logging.LogLevel.Warning).ConfigureAwait(false);
+            _rateLimiter.RecordFailure(remoteIp);
             return BadRequest("Token validation failed");
         }
 
@@ -269,7 +302,22 @@ public class OidcController : ControllerBase
         if (string.IsNullOrEmpty(nonceClaim) || nonceClaim != oidcState.Nonce)
         {
             _logger.LogWarning("Nonce missing or mismatch in OIDC callback for provider {Provider}", providerId);
+            _rateLimiter.RecordFailure(remoteIp);
             return BadRequest("Token validation failed: nonce mismatch");
+        }
+
+        // Optional AMR/ACR enforcement — require the IdP to have asserted MFA / a specific
+        // assurance level. Skipped when both lists are empty (default).
+        if (!EnforceAmrAcr(provider, idToken, providerId, out var amrAcrFailure))
+        {
+            await _rbacService.LogActivityAsync(
+                $"OIDC login rejected: {amrAcrFailure}",
+                "OidcLoginFailure",
+                Guid.Empty,
+                $"provider={providerId}",
+                Microsoft.Extensions.Logging.LogLevel.Warning).ConfigureAwait(false);
+            _rateLimiter.RecordFailure(remoteIp);
+            return Unauthorized(amrAcrFailure);
         }
 
         // A.1 — email_verified enforcement
@@ -284,6 +332,11 @@ public class OidcController : ControllerBase
                 _logger.LogWarning(
                     "OIDC login rejected: email_verified={Value} for provider {Provider}",
                     emailVerifiedClaim, providerId);
+                await _rbacService.LogActivityAsync(
+                    "OIDC login rejected: email_verified=false",
+                    "OidcLoginFailure", Guid.Empty, $"provider={providerId}",
+                    Microsoft.Extensions.Logging.LogLevel.Warning).ConfigureAwait(false);
+                _rateLimiter.RecordFailure(remoteIp);
                 return Unauthorized("Email address is not verified. Please verify your email with the identity provider.");
             }
         }
@@ -314,6 +367,21 @@ public class OidcController : ControllerBase
         // A.3 — apply claim transforms before role matching
         var rawRoles = roles;
         roles = ClaimParser.ApplyTransforms(roles, provider.RoleTransforms, providerId, _logger);
+
+        // Audit when transforms changed the role set — silent renames/drops are the #1
+        // debug pain point ("user has no perms but their IdP shows the right groups").
+        // Surfacing this in Jellyfin's activity log lets admins see it without reading container logs.
+        if ((provider.RoleTransforms?.Count ?? 0) > 0 && !rawRoles.SequenceEqual(roles, StringComparer.Ordinal))
+        {
+            var dropped = rawRoles.Except(roles, StringComparer.OrdinalIgnoreCase).ToArray();
+            var added = roles.Except(rawRoles, StringComparer.OrdinalIgnoreCase).ToArray();
+            await _rbacService.LogActivityAsync(
+                $"OIDC role transforms applied for {username}",
+                "OidcRoleTransform",
+                Guid.Empty,
+                $"provider={providerId} dropped={LogRedaction.RedactRoles(dropped, true)} added={LogRedaction.RedactRoles(added, true)}",
+                Microsoft.Extensions.Logging.LogLevel.Information).ConfigureAwait(false);
+        }
 
         var entitlements = provider.EnableEntitlements
             ? ClaimParser.ExtractRoles(idToken, provider.EntitlementClaim)
@@ -369,6 +437,7 @@ public class OidcController : ControllerBase
             EmailVerified = emailVerified
         });
 
+        _rateLimiter.RecordSuccess(remoteIp);
         SetCallbackSecurityHeaders();
         return Content(BuildCallbackHtml(sessionToken, providerId), "text/html");
     }
@@ -644,6 +713,59 @@ public class OidcController : ControllerBase
     private string BuildCallbackUri(string providerId)
     {
         return $"{Request.Scheme}://{Request.Host}/sso/OIDC/Callback/{providerId}";
+    }
+
+    // Validates the id_token's amr / acr claims against per-provider requirements.
+    // Returns true when allowed; false with a user-facing reason when rejected.
+    // Empty config lists short-circuit to allow (no enforcement).
+    private bool EnforceAmrAcr(
+        OidcProviderConfig provider,
+        JwtSecurityToken idToken,
+        string providerId,
+        out string failureReason)
+    {
+        failureReason = string.Empty;
+
+        var requiredAmr = provider.RequiredAmrValues;
+        if (requiredAmr != null && requiredAmr.Count > 0)
+        {
+            var presentAmr = idToken.Claims
+                .Where(c => c.Type == "amr")
+                .Select(c => c.Value)
+                .ToArray();
+            var matched = presentAmr.Any(v =>
+                requiredAmr.Any(r => string.Equals(r, v, StringComparison.OrdinalIgnoreCase)));
+            if (!matched)
+            {
+                _logger.LogWarning(
+                    "OIDC login rejected: required amr not satisfied for provider {Provider}. present={Present} required={Required}",
+                    providerId,
+                    LogRedaction.RedactRoles(presentAmr),
+                    LogRedaction.RedactRoles(requiredAmr.ToArray()));
+                failureReason = "Authentication did not satisfy required authentication method (amr).";
+                return false;
+            }
+        }
+
+        var requiredAcr = provider.RequiredAcrValues;
+        if (requiredAcr != null && requiredAcr.Count > 0)
+        {
+            // acr is a single string per spec.
+            var acr = ClaimParser.ExtractClaim(idToken, "acr");
+            var matched = !string.IsNullOrEmpty(acr) &&
+                requiredAcr.Any(r => string.Equals(r, acr, StringComparison.Ordinal));
+            if (!matched)
+            {
+                _logger.LogWarning(
+                    "OIDC login rejected: required acr not satisfied for provider {Provider}. present={Present}",
+                    providerId,
+                    LogRedaction.Sanitize(acr));
+                failureReason = "Authentication did not satisfy required assurance level (acr).";
+                return false;
+            }
+        }
+
+        return true;
     }
 
     private static string CreateCodeChallenge(string codeVerifier)

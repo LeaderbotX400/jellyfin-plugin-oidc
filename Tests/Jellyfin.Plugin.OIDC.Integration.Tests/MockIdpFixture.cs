@@ -91,7 +91,9 @@ public sealed class MockIdpFixture : IAsyncLifetime
         IEnumerable<string>? roles = null,
         IEnumerable<string>? entitlements = null,
         string? nonce = null,
-        bool useHmacSigning = false)
+        bool useHmacSigning = false,
+        IEnumerable<string>? amr = null,
+        string? acr = null)
     {
         var claims = new List<Claim>
         {
@@ -112,6 +114,13 @@ public sealed class MockIdpFixture : IAsyncLifetime
         {
             foreach (var e in entitlements) claims.Add(new Claim("entitlements", e));
         }
+
+        if (amr != null)
+        {
+            foreach (var a in amr) claims.Add(new Claim("amr", a));
+        }
+
+        if (acr != null) claims.Add(new Claim("acr", acr));
 
         var creds = useHmacSigning
             ? new SigningCredentials(new SymmetricSecurityKey(Encoding.UTF8.GetBytes(ClientSecret)), SecurityAlgorithms.HmacSha256)

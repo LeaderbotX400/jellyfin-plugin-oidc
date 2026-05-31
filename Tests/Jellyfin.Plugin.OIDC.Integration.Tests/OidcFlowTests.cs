@@ -10,6 +10,7 @@ using Jellyfin.Plugin.OIDC.Configuration;
 using Jellyfin.Plugin.OIDC.Services;
 using MediaBrowser.Controller.Session;
 using Microsoft.AspNetCore.Http;
+using Moq;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.Extensions.Logging.Abstractions;
 using Xunit;
@@ -150,6 +151,202 @@ public sealed class OidcFlowTests : IClassFixture<MockIdpFixture>
         await fixture.RunFullFlow("eve", "user-eve", email: "eve@example.com", emailVerified: true);
 
         Assert.NotNull(fixture.UserStore.GetByName("eve"));
+    }
+
+    [Fact]
+    public async Task Callback_RequiredAmrMissing_Returns401()
+    {
+        var fixture = new TestFixture(_idp);
+        var provider = fixture.AddProvider();
+        provider.RequiredAmrValues = new List<string> { "mfa" };
+
+        var startResult = await fixture.Controller.Start(ProviderId);
+        var redirect = Assert.IsType<RedirectResult>(startResult);
+        var stateValue = ExtractStateFromUrl(redirect.Url);
+        var nonceValue = ExtractParamFromUrl(redirect.Url, "nonce");
+        TestFixture.PropagateCookies(fixture.Controller);
+
+        _idp.EnqueueTokenResponse(
+            sub: "user-noamr",
+            username: "noamr",
+            nonce: nonceValue,
+            amr: new[] { "pwd" });
+
+        var callbackResult = await fixture.Controller.Callback(ProviderId, code: "test-code", state: stateValue);
+        Assert.IsType<UnauthorizedObjectResult>(callbackResult);
+    }
+
+    [Fact]
+    public async Task Callback_RequiredAmrPresent_AllowsLogin()
+    {
+        var fixture = new TestFixture(_idp);
+        var provider = fixture.AddProvider();
+        provider.RequiredAmrValues = new List<string> { "mfa", "otp" };
+
+        var startResult = await fixture.Controller.Start(ProviderId);
+        var redirect = Assert.IsType<RedirectResult>(startResult);
+        var stateValue = ExtractStateFromUrl(redirect.Url);
+        var nonceValue = ExtractParamFromUrl(redirect.Url, "nonce");
+        TestFixture.PropagateCookies(fixture.Controller);
+
+        _idp.EnqueueTokenResponse(
+            sub: "user-mfa",
+            username: "mfauser",
+            nonce: nonceValue,
+            amr: new[] { "pwd", "otp" });
+
+        var callbackResult = await fixture.Controller.Callback(ProviderId, code: "test-code", state: stateValue);
+        Assert.IsNotType<UnauthorizedObjectResult>(callbackResult);
+    }
+
+    [Fact]
+    public async Task Callback_RequiredAmrNoClaimAtAll_Returns401()
+    {
+        // Token entirely lacks an amr claim. Must be rejected, not silently allowed.
+        var fixture = new TestFixture(_idp);
+        var provider = fixture.AddProvider();
+        provider.RequiredAmrValues = new List<string> { "mfa" };
+
+        var startResult = await fixture.Controller.Start(ProviderId);
+        var redirect = Assert.IsType<RedirectResult>(startResult);
+        var stateValue = ExtractStateFromUrl(redirect.Url);
+        var nonceValue = ExtractParamFromUrl(redirect.Url, "nonce");
+        TestFixture.PropagateCookies(fixture.Controller);
+
+        _idp.EnqueueTokenResponse(
+            sub: "user-noclaim", username: "noclaim", nonce: nonceValue);
+        // No amr passed at all.
+
+        var callbackResult = await fixture.Controller.Callback(ProviderId, code: "test-code", state: stateValue);
+        Assert.IsType<UnauthorizedObjectResult>(callbackResult);
+    }
+
+    [Fact]
+    public async Task Callback_RequiredAmr_CaseInsensitive_Allowed()
+    {
+        // RFC 8176 AMR values are case-insensitive in practice across IdPs;
+        // we treat them so to avoid silent failures over casing differences.
+        var fixture = new TestFixture(_idp);
+        var provider = fixture.AddProvider();
+        provider.RequiredAmrValues = new List<string> { "MFA" };
+
+        var startResult = await fixture.Controller.Start(ProviderId);
+        var redirect = Assert.IsType<RedirectResult>(startResult);
+        var stateValue = ExtractStateFromUrl(redirect.Url);
+        var nonceValue = ExtractParamFromUrl(redirect.Url, "nonce");
+        TestFixture.PropagateCookies(fixture.Controller);
+
+        _idp.EnqueueTokenResponse(
+            sub: "user-case", username: "caseuser", nonce: nonceValue,
+            amr: new[] { "mfa" });
+
+        var callbackResult = await fixture.Controller.Callback(ProviderId, code: "test-code", state: stateValue);
+        Assert.IsNotType<UnauthorizedObjectResult>(callbackResult);
+    }
+
+    [Fact]
+    public async Task Callback_RequiredAcr_CaseSensitive_RejectsCaseChange()
+    {
+        // ACR values are spec'd as case-sensitive URIs. A casing mismatch must reject.
+        var fixture = new TestFixture(_idp);
+        var provider = fixture.AddProvider();
+        provider.RequiredAcrValues = new List<string> { "urn:mace:incommon:iap:silver" };
+
+        var startResult = await fixture.Controller.Start(ProviderId);
+        var redirect = Assert.IsType<RedirectResult>(startResult);
+        var stateValue = ExtractStateFromUrl(redirect.Url);
+        var nonceValue = ExtractParamFromUrl(redirect.Url, "nonce");
+        TestFixture.PropagateCookies(fixture.Controller);
+
+        _idp.EnqueueTokenResponse(
+            sub: "user-acrcase", username: "acrcase", nonce: nonceValue,
+            acr: "URN:MACE:INCOMMON:IAP:SILVER");
+
+        var callbackResult = await fixture.Controller.Callback(ProviderId, code: "test-code", state: stateValue);
+        Assert.IsType<UnauthorizedObjectResult>(callbackResult);
+    }
+
+    [Fact]
+    public async Task Callback_RequiredAmrAndAcr_BothMustPass()
+    {
+        // Both lists set: AMR matches but ACR doesn't → must reject.
+        var fixture = new TestFixture(_idp);
+        var provider = fixture.AddProvider();
+        provider.RequiredAmrValues = new List<string> { "mfa" };
+        provider.RequiredAcrValues = new List<string> { "high" };
+
+        var startResult = await fixture.Controller.Start(ProviderId);
+        var redirect = Assert.IsType<RedirectResult>(startResult);
+        var stateValue = ExtractStateFromUrl(redirect.Url);
+        var nonceValue = ExtractParamFromUrl(redirect.Url, "nonce");
+        TestFixture.PropagateCookies(fixture.Controller);
+
+        _idp.EnqueueTokenResponse(
+            sub: "u", username: "u", nonce: nonceValue,
+            amr: new[] { "mfa" }, acr: "low");
+
+        var callbackResult = await fixture.Controller.Callback(ProviderId, code: "test-code", state: stateValue);
+        Assert.IsType<UnauthorizedObjectResult>(callbackResult);
+    }
+
+    [Fact]
+    public async Task Callback_AmrRejection_WritesAuditEntry()
+    {
+        // Regression guard: rejected logins MUST surface in Jellyfin's activity log,
+        // otherwise admins have no way to see brute-force or misconfigured-IdP traffic.
+        var fixture = new TestFixture(_idp);
+        var provider = fixture.AddProvider();
+        provider.RequiredAmrValues = new List<string> { "mfa" };
+
+        var startResult = await fixture.Controller.Start(ProviderId);
+        var redirect = Assert.IsType<RedirectResult>(startResult);
+        var stateValue = ExtractStateFromUrl(redirect.Url);
+        var nonceValue = ExtractParamFromUrl(redirect.Url, "nonce");
+        TestFixture.PropagateCookies(fixture.Controller);
+
+        _idp.EnqueueTokenResponse(
+            sub: "u", username: "u", nonce: nonceValue, amr: new[] { "pwd" });
+
+        await fixture.Controller.Callback(ProviderId, code: "test-code", state: stateValue);
+
+        fixture.ActivityManagerMock.Verify(m => m.CreateAsync(
+            It.Is<Jellyfin.Database.Implementations.Entities.ActivityLog>(
+                a => a.Type == "OidcLoginFailure")),
+            Times.AtLeastOnce);
+    }
+
+    [Fact]
+    public async Task Callback_EmptyAmrConfig_DoesNotEnforce()
+    {
+        // Regression guard: empty config must be a no-op, even on tokens with no amr claim.
+        var fixture = new TestFixture(_idp);
+        fixture.AddProvider();
+
+        await fixture.RunFullFlow("noamr-noconfig", "sub-noamr");
+        Assert.NotNull(fixture.UserStore.GetByName("noamr-noconfig"));
+    }
+
+    [Fact]
+    public async Task Callback_RequiredAcrMismatch_Returns401()
+    {
+        var fixture = new TestFixture(_idp);
+        var provider = fixture.AddProvider();
+        provider.RequiredAcrValues = new List<string> { "urn:mace:incommon:iap:silver" };
+
+        var startResult = await fixture.Controller.Start(ProviderId);
+        var redirect = Assert.IsType<RedirectResult>(startResult);
+        var stateValue = ExtractStateFromUrl(redirect.Url);
+        var nonceValue = ExtractParamFromUrl(redirect.Url, "nonce");
+        TestFixture.PropagateCookies(fixture.Controller);
+
+        _idp.EnqueueTokenResponse(
+            sub: "user-acr",
+            username: "acruser",
+            nonce: nonceValue,
+            acr: "urn:mace:incommon:iap:bronze");
+
+        var callbackResult = await fixture.Controller.Callback(ProviderId, code: "test-code", state: stateValue);
+        Assert.IsType<UnauthorizedObjectResult>(callbackResult);
     }
 
     [Fact]
