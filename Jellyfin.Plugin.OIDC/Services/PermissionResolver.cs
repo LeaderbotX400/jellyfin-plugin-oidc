@@ -201,6 +201,13 @@ public static class PermissionResolver
         {
             maxRating = Math.Max(merged.MaxParentalRating ?? 0, entSet.MaxParentalRating ?? 0);
         }
+        else if (!clearRating && !maxRating.HasValue && !respectExisting)
+        {
+            // EntitlementsAuthoritative default: when nothing opines on parental rating, leave the
+            // user unrestricted (clear MaxParentalRatingScore) rather than preserving a prior cap.
+            // In RespectExisting mode, no-opinion still means "don't touch".
+            clearRating = true;
+        }
 
         return new PermissionPreview(
             IsAdmin: isAdmin,

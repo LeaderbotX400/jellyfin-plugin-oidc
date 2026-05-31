@@ -142,11 +142,26 @@ public class RbacBehaviorModeTests
     }
 
     [Fact]
-    public void MergeMappings_NoRating_KeepsMaxParentalRatingNull()
+    public void MergeMappings_NoRating_ClearsMaxParentalRatingInAuthoritativeMode()
     {
-        // Regression: previously DefaultIfEmpty().Max() produced 0, locking users to rating=0.
+        // EntitlementsAuthoritative default: no rating opinion means the user is unrestricted —
+        // we actively clear MaxParentalRatingScore rather than preserving a stale prior cap.
+        // (Regression guard: previously DefaultIfEmpty().Max() produced 0, locking users to rating=0.)
         var cfg = MakeConfig(
             RbacBehaviorMode.EntitlementsAuthoritative,
+            new() { new() { RoleName = "user", EnableMediaPlayback = true } });
+
+        var p = Compute(["user"], [], cfg);
+
+        Assert.Null(p.MaxParentalRating);
+        Assert.True(p.ClearMaxParentalRating);
+    }
+
+    [Fact]
+    public void MergeMappings_NoRating_RespectExisting_LeavesMaxParentalRatingAlone()
+    {
+        var cfg = MakeConfig(
+            RbacBehaviorMode.RespectExistingWhenUnspecified,
             new() { new() { RoleName = "user", EnableMediaPlayback = true } });
 
         var p = Compute(["user"], [], cfg);
