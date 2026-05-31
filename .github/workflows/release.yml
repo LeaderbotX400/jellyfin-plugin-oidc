@@ -112,6 +112,12 @@ jobs:
           echo "sha256_checksum=${SHA256_CHECKSUM}" >> "$GITHUB_OUTPUT"
           echo "MD5 (Jellyfin manifest): ${MD5_CHECKSUM}"
           echo "SHA-256 (informational): ${SHA256_CHECKSUM}"
+
+          # Emit checksum files alongside the zip so consumers can verify the
+          # artifact post-download. forgejo-release uploads everything in
+          # release-staging/.
+          (cd release-staging && md5sum oidc-rbac.zip > oidc-rbac.zip.md5)
+          (cd release-staging && sha256sum oidc-rbac.zip > oidc-rbac.zip.sha256)
         id: checksums
 
       - name: Update manifest.json
