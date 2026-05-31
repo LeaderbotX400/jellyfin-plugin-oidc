@@ -217,4 +217,90 @@ public class ClientIpResolverTests
         var ip = ClientIpResolver.Resolve(ctx, true, Cidrs("10.0.0.0/8"));
         Assert.Null(ip);
     }
+
+    // ── ResolveScheme / ResolveHost adversarial tests ──────────────────────
+    // Security constraint: an untrusted peer sending X-Forwarded-Host: evil.com
+    // must NEVER influence the redirect_uri — that would let an attacker make
+    // legitimate users send their OIDC code to the attacker's domain.
+
+    private static HttpContext SchemeHostCtx(
+        string remote,
+        string scheme,
+        string host,
+        params (string Name, string Value)[] headers)
+    {
+        var ctx = new DefaultHttpContext();
+        ctx.Connection.RemoteIpAddress = IPAddress.Parse(remote);
+        ctx.Request.Scheme = scheme;
+        ctx.Request.Host = new HostString(host);
+        foreach (var (n, v) in headers)
+        {
+            ctx.Request.Headers[n] = v;
+        }
+        return ctx;
+    }
+
+    [Fact]
+    public void XffProto_IgnoredWhenPeerUntrusted()
+    {
+        // Attacker connects directly from public internet and sends X-Forwarded-Proto: https.
+        // Must return the real Request.Scheme, not the spoofed value.
+        var ctx = SchemeHostCtx("203.0.113.99", "http", "internal.local",
+            ("X-Forwarded-Proto", "https"));
+        var scheme = ClientIpResolver.ResolveScheme(ctx, trustForwardedHeaders: true, Cidrs("10.0.0.0/8"));
+        Assert.Equal("http", scheme);
+    }
+
+    [Fact]
+    public void XffHost_IgnoredWhenPeerUntrusted()
+    {
+        // Attacker connects directly from public internet and sends X-Forwarded-Host: evil.example.com.
+        // Must return the real Request.Host, not the spoofed value.
+        var ctx = SchemeHostCtx("203.0.113.99", "http", "real.example.com",
+            ("X-Forwarded-Host", "evil.example.com"));
+        var host = ClientIpResolver.ResolveHost(ctx, trustForwardedHeaders: true, Cidrs("10.0.0.0/8"));
+        Assert.Equal("real.example.com", host);
+    }
+
+    [Fact]
+    public void XffProto_TrustedPeer_Honored()
+    {
+        // Peer is a trusted proxy — X-Forwarded-Proto must be returned.
+        var ctx = SchemeHostCtx("10.0.0.5", "http", "internal.local",
+            ("X-Forwarded-Proto", "https"));
+        var scheme = ClientIpResolver.ResolveScheme(ctx, trustForwardedHeaders: true, Cidrs("10.0.0.0/8"));
+        Assert.Equal("https", scheme);
+    }
+
+    [Fact]
+    public void XffHost_TrustedPeer_Honored()
+    {
+        // Peer is a trusted proxy — X-Forwarded-Host must be returned.
+        var ctx = SchemeHostCtx("10.0.0.5", "http", "internal.local",
+            ("X-Forwarded-Host", "jellyfin.example.com"));
+        var host = ClientIpResolver.ResolveHost(ctx, trustForwardedHeaders: true, Cidrs("10.0.0.0/8"));
+        Assert.Equal("jellyfin.example.com", host);
+    }
+
+    [Fact]
+    public void XffHost_CommaSeparated_TakesLeftmost()
+    {
+        // X-Forwarded-Host may be comma-separated when multiple proxies append. The leftmost
+        // entry is the original client-facing host; rightmost entries are intermediate proxies.
+        var ctx = SchemeHostCtx("10.0.0.5", "http", "internal.local",
+            ("X-Forwarded-Host", "real.example.com, internal.local"));
+        var host = ClientIpResolver.ResolveHost(ctx, trustForwardedHeaders: true, Cidrs("10.0.0.0/8"));
+        Assert.Equal("real.example.com", host);
+    }
+
+    [Fact]
+    public void XffProto_FlagOff_Ignored()
+    {
+        // TrustForwardedHeaders=false: even a trusted peer with the header present must not
+        // influence the resolved scheme — the admin has not opted in.
+        var ctx = SchemeHostCtx("10.0.0.5", "http", "internal.local",
+            ("X-Forwarded-Proto", "https"));
+        var scheme = ClientIpResolver.ResolveScheme(ctx, trustForwardedHeaders: false, Cidrs("10.0.0.0/8"));
+        Assert.Equal("http", scheme);
+    }
 }

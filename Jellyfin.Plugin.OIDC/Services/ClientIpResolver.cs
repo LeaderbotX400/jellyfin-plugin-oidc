@@ -91,6 +91,62 @@ public static class ClientIpResolver
         return result;
     }
 
+    /// <summary>
+    /// Returns the effective scheme (e.g. "https") for the request, honoring
+    /// <c>X-Forwarded-Proto</c> only when <paramref name="trustForwardedHeaders"/> is true,
+    /// <paramref name="trustedProxies"/> is non-empty, and the immediate TCP peer is in that list.
+    /// Takes the leftmost value when the header is comma-separated.
+    /// </summary>
+    public static string ResolveScheme(
+        HttpContext httpContext,
+        bool trustForwardedHeaders,
+        IReadOnlyList<IPNetwork> trustedProxies)
+    {
+        var remote = httpContext.Connection.RemoteIpAddress;
+        if (trustForwardedHeaders && trustedProxies.Count > 0 && remote != null
+            && IsInAny(remote, trustedProxies))
+        {
+            var header = httpContext.Request.Headers["X-Forwarded-Proto"].ToString();
+            if (!string.IsNullOrWhiteSpace(header))
+            {
+                // Take the leftmost value (the original client-facing scheme).
+                var first = header.Split(',', 2, StringSplitOptions.TrimEntries)[0];
+                if (!string.IsNullOrEmpty(first))
+                    return first;
+            }
+        }
+
+        return httpContext.Request.Scheme;
+    }
+
+    /// <summary>
+    /// Returns the effective host (e.g. "example.com" or "example.com:8080") for the request,
+    /// honoring <c>X-Forwarded-Host</c> only when <paramref name="trustForwardedHeaders"/> is true,
+    /// <paramref name="trustedProxies"/> is non-empty, and the immediate TCP peer is in that list.
+    /// Takes the leftmost value when the header is comma-separated.
+    /// </summary>
+    public static string ResolveHost(
+        HttpContext httpContext,
+        bool trustForwardedHeaders,
+        IReadOnlyList<IPNetwork> trustedProxies)
+    {
+        var remote = httpContext.Connection.RemoteIpAddress;
+        if (trustForwardedHeaders && trustedProxies.Count > 0 && remote != null
+            && IsInAny(remote, trustedProxies))
+        {
+            var header = httpContext.Request.Headers["X-Forwarded-Host"].ToString();
+            if (!string.IsNullOrWhiteSpace(header))
+            {
+                // Take the leftmost value (the original client-facing host).
+                var first = header.Split(',', 2, StringSplitOptions.TrimEntries)[0];
+                if (!string.IsNullOrEmpty(first))
+                    return first;
+            }
+        }
+
+        return httpContext.Request.Host.Value ?? string.Empty;
+    }
+
     private static bool IsInAny(IPAddress ip, IReadOnlyList<IPNetwork> ranges)
     {
         // Normalize ::ffff:a.b.c.d so a v4 CIDR can match a v4-mapped v6 form.
