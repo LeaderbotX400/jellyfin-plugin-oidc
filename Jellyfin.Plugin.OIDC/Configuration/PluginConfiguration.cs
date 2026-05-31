@@ -35,6 +35,8 @@ public static class ConfigMasking
             AutoCreateUsers = config.AutoCreateUsers,
             DefaultRoleName = config.DefaultRoleName,
             VerboseClaimLogging = config.VerboseClaimLogging,
+            TrustForwardedHeaders = config.TrustForwardedHeaders,
+            TrustedProxyCidrs = new List<string>(config.TrustedProxyCidrs),
             RoleMappings = config.RoleMappings.Select(m => new RoleMapping
             {
                 RoleName = m.RoleName,
@@ -102,7 +104,9 @@ public static class ConfigMasking
                     {
                         FromValue = t.FromValue,
                         ToValue = t.ToValue
-                    }).ToList()
+                    }).ToList(),
+                    RequiredAmrValues = new List<string>(p.RequiredAmrValues),
+                    RequiredAcrValues = new List<string>(p.RequiredAcrValues)
                 };
                 MaskSecretProperties(copy);
                 return copy;
@@ -230,6 +234,20 @@ public class PluginConfiguration : BasePluginConfiguration
     /// wipe deliberately-set deny flags.
     /// </summary>
     public bool MigratedDenyDefaultsV013 { get; set; } = false;
+
+    /// <summary>
+    /// When true, the plugin trusts <c>X-Forwarded-For</c> / <c>X-Real-IP</c> headers to determine
+    /// the real client IP. Enable only when Jellyfin sits behind a trusted reverse proxy; leaving this
+    /// on without <see cref="TrustedProxyCidrs"/> means any client can spoof its IP.
+    /// </summary>
+    public bool TrustForwardedHeaders { get; set; } = false;
+
+    /// <summary>
+    /// CIDR blocks of reverse proxies whose forwarded-for headers are trusted.
+    /// Only evaluated when <see cref="TrustForwardedHeaders"/> is true.
+    /// Example: ["10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16"].
+    /// </summary>
+    public List<string> TrustedProxyCidrs { get; set; } = new();
 }
 
 /// <summary>
@@ -329,6 +347,18 @@ public class OidcProviderConfig
     /// MITM on plain HTTP can swap JWKS and forge arbitrary tokens.
     /// </summary>
     public bool AllowInsecureAuthority { get; set; }
+
+    /// <summary>
+    /// When non-empty, the id_token must contain an <c>amr</c> claim whose value list includes
+    /// every entry in this list. Use to enforce step-up authentication factors (e.g. "mfa", "otp").
+    /// </summary>
+    public List<string> RequiredAmrValues { get; set; } = new();
+
+    /// <summary>
+    /// When non-empty, the id_token must contain an <c>acr</c> claim matching one of these values.
+    /// Use to enforce NIST / EIDAS assurance levels (e.g. "urn:mace:incommon:iap:silver").
+    /// </summary>
+    public List<string> RequiredAcrValues { get; set; } = new();
 }
 
 /// <summary>Maps a raw claim value to a normalized value before role matching.</summary>

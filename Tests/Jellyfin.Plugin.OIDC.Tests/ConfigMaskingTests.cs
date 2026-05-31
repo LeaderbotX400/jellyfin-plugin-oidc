@@ -118,6 +118,81 @@ public class ConfigMaskingTests
         }
     }
 
+    // ── New field round-trip tests ────────────────────────────────────────────
+
+    [Fact]
+    public void Mask_PerProviderAmrAndAcrValues_SurviveRoundTrip()
+    {
+        var config = new PluginConfiguration();
+        var provider = new OidcProviderConfig
+        {
+            ProviderId = "p1",
+            RequiredAmrValues = new List<string> { "mfa", "otp" },
+            RequiredAcrValues = new List<string> { "urn:mace:incommon:iap:silver" }
+        };
+        config.Providers.Add(provider);
+
+        var masked = ConfigMasking.Mask(config);
+
+        var maskedProvider = masked.Providers.Single();
+        Assert.Equal(new List<string> { "mfa", "otp" }, maskedProvider.RequiredAmrValues);
+        Assert.Equal(new List<string> { "urn:mace:incommon:iap:silver" }, maskedProvider.RequiredAcrValues);
+    }
+
+    [Fact]
+    public void Mask_PerProviderAmrAndAcrValues_CopyIsIndependent()
+    {
+        var config = new PluginConfiguration();
+        var provider = new OidcProviderConfig
+        {
+            ProviderId = "p1",
+            RequiredAmrValues = new List<string> { "mfa" },
+            RequiredAcrValues = new List<string> { "silver" }
+        };
+        config.Providers.Add(provider);
+
+        var masked = ConfigMasking.Mask(config);
+
+        // Mutate originals — masked copy must be unaffected
+        provider.RequiredAmrValues.Add("pwd");
+        provider.RequiredAcrValues.Add("gold");
+
+        Assert.Equal(new List<string> { "mfa" }, masked.Providers.Single().RequiredAmrValues);
+        Assert.Equal(new List<string> { "silver" }, masked.Providers.Single().RequiredAcrValues);
+    }
+
+    [Fact]
+    public void Mask_PluginLevelTrustForwardedHeaders_SurvivesRoundTrip()
+    {
+        var config = new PluginConfiguration
+        {
+            TrustForwardedHeaders = true,
+            TrustedProxyCidrs = new List<string> { "10.0.0.0/8", "192.168.0.0/16" }
+        };
+
+        var masked = ConfigMasking.Mask(config);
+
+        Assert.True(masked.TrustForwardedHeaders);
+        Assert.Equal(new List<string> { "10.0.0.0/8", "192.168.0.0/16" }, masked.TrustedProxyCidrs);
+    }
+
+    [Fact]
+    public void Mask_PluginLevelTrustedProxyCidrs_CopyIsIndependent()
+    {
+        var config = new PluginConfiguration
+        {
+            TrustForwardedHeaders = true,
+            TrustedProxyCidrs = new List<string> { "10.0.0.0/8" }
+        };
+
+        var masked = ConfigMasking.Mask(config);
+
+        // Mutate original — masked copy must be unaffected
+        config.TrustedProxyCidrs.Add("172.16.0.0/12");
+
+        Assert.Equal(new List<string> { "10.0.0.0/8" }, masked.TrustedProxyCidrs);
+    }
+
     // ── Test helpers ──────────────────────────────────────────────────────────
 
     /// <summary>
@@ -147,7 +222,9 @@ public class ConfigMaskingTests
             EntitlementPrefix = source.EntitlementPrefix,
             EnableEntitlements = source.EnableEntitlements,
             RequireEmailVerified = source.RequireEmailVerified,
-            RoleTransforms = new List<ClaimTransform>(source.RoleTransforms)
+            RoleTransforms = new List<ClaimTransform>(source.RoleTransforms),
+            RequiredAmrValues = new List<string>(source.RequiredAmrValues),
+            RequiredAcrValues = new List<string>(source.RequiredAcrValues)
         };
 
         foreach (var prop in GetSecretProperties(copy))
