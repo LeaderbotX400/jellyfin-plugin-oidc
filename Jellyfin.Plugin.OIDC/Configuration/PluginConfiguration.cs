@@ -230,6 +230,23 @@ public class PluginConfiguration : BasePluginConfiguration
     /// wipe deliberately-set deny flags.
     /// </summary>
     public bool MigratedDenyDefaultsV013 { get; set; } = false;
+
+    /// <summary>
+    /// When true, the callback rate limiter and audit log will honor <c>X-Forwarded-For</c>
+    /// and <c>X-Real-IP</c> headers — but ONLY when the immediate TCP peer is itself in
+    /// <see cref="TrustedProxyCidrs"/>. Required if Jellyfin sits behind a reverse proxy,
+    /// otherwise every request looks like it comes from the proxy and a single failed-login
+    /// burst bans the proxy IP, locking out all users. Default false.
+    /// </summary>
+    public bool TrustForwardedHeaders { get; set; } = false;
+
+    /// <summary>
+    /// CIDR ranges (e.g. <c>10.0.0.0/8</c>, <c>192.168.0.0/16</c>, <c>::1/128</c>) for the
+    /// reverse proxies whose forwarded headers we trust. Empty disables forwarded-header
+    /// resolution even when <see cref="TrustForwardedHeaders"/> is true (fail-closed default).
+    /// Invalid entries are ignored with a logged warning.
+    /// </summary>
+    public List<string> TrustedProxyCidrs { get; set; } = new();
 }
 
 /// <summary>

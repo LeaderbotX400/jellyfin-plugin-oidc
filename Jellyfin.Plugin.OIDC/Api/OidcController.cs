@@ -137,7 +137,9 @@ public class OidcController : ControllerBase
     [HttpGet("Callback/{providerId}")]
     public async Task<ActionResult> Callback(string providerId, [FromQuery] string code, [FromQuery] string state)
     {
-        var remoteIp = HttpContext.Connection.RemoteIpAddress;
+        var cfg = _configProvider.GetConfiguration();
+        var trustedProxies = ClientIpResolver.ParseCidrs(cfg.TrustedProxyCidrs, _logger);
+        var remoteIp = ClientIpResolver.Resolve(HttpContext, cfg.TrustForwardedHeaders, trustedProxies, _logger);
         if (_rateLimiter.IsBanned(remoteIp, out var retryAfter))
         {
             Response.Headers["Retry-After"] = ((int)retryAfter.TotalSeconds).ToString(System.Globalization.CultureInfo.InvariantCulture);
