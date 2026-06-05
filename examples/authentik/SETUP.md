@@ -1,4 +1,4 @@
-# Authentik + Jellyfin OIDC SSO Setup
+# Authentik + Jellyfin OIDC-Auth Setup
 
 ## Overview
 
@@ -137,7 +137,7 @@ docker compose restart jellyfin
 
 ### 3.2 Plugin Configuration
 
-Go to **Jellyfin Admin Dashboard > Plugins > OIDC SSO**
+Go to **Jellyfin Admin Dashboard > Plugins > OIDC-Auth**
 
 #### Providers Tab
 

@@ -89,7 +89,7 @@ public class UserSyncService
             // No sub-link yet. Resolution order, most-explicit-first:
             //
             //   Path 1: Admin-pre-authorized user. The admin set someone's Authentication
-            //           Provider to "OIDC SSO" in Jellyfin's standard user UI. We find that
+            //           Provider to "OIDC-Auth" in Jellyfin's standard user UI. We find that
             //           user by the AuthProviderId pin — NOT by username — because Jellyfin
             //           usernames are display labels, not identities, and there's no reason
             //           the OIDC preferred_username should match a chosen Jellyfin username.
@@ -201,7 +201,7 @@ public class UserSyncService
         {
             _logger.LogWarning(
                 "Refusing OIDC auto-bind: local user '{Username}' already exists (provider={Provider}, sub={SubRedacted}). " +
-                "To migrate this user, set their Authentication Provider to 'OIDC SSO' in the Jellyfin admin UI, " +
+                "To migrate this user, set their Authentication Provider to 'OIDC-Auth' in the Jellyfin admin UI, " +
                 "or enable AutoLinkByVerifiedEmail on the provider.",
                 username, providerId, LogRedaction.RedactSub(sub));
             throw new OidcUsernameCollisionException(username);
@@ -253,7 +253,7 @@ public class UserSyncService
 
     /// <summary>
     /// Finds the user (if any) that an admin has pre-authorized for OIDC login by setting their
-    /// Authentication Provider to "OIDC SSO" in Jellyfin's standard user UI. Identification is
+    /// Authentication Provider to "OIDC-Auth" in Jellyfin's standard user UI. Identification is
     /// by the AuthProviderId pin alone — Jellyfin usernames are not identities, so we do not
     /// require the OIDC preferred_username to match.
     ///

@@ -131,7 +131,7 @@ jobs:
             echo "No origin/manifest branch yet — seeding empty manifest"
             jq -n '[{
               guid: "eea268ef-ea57-4462-91c4-44833ae08510",
-              name: "OIDC SSO",
+              name: "OIDC-Auth",
               description: "Advanced OIDC authentication with role-based library access control",
               overview: "OpenID Connect SSO with role-to-library mapping, multi-provider support, and admin UI.",
               owner: "LeaderbotX400",

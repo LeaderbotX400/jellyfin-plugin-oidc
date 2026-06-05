@@ -590,7 +590,7 @@ export default function (view) {
             Dashboard.hideLoadingMsg();
         }).catch(function (err) {
             Dashboard.hideLoadingMsg();
-            console.error('OIDC SSO: failed to load config', err);
+            console.error('OIDC-Auth: failed to load config', err);
         });
     }
 

@@ -40,7 +40,7 @@ new `MigratedDenyDefaults` sentinel field), the plugin:
 After upgrading, check the Jellyfin server log for warnings like:
 
 ```
-WARN  Jellyfin.Plugin.OIDC.OidcPlugin OIDC SSO migration (v0.1.3): deny mapping 'my-deny-role'
+WARN  Jellyfin.Plugin.OIDC.OidcPlugin OIDC-Auth migration (v0.1.3): deny mapping 'my-deny-role'
       had legacy default-true values for EnableMediaPlayback / EnableRemoteAccess / EnableTranscoding.
       These have been cleared to null (no-op for deny). Please review your deny mappings in the
       admin UI and explicitly enable the permissions you want this deny rule to strip.
@@ -71,7 +71,7 @@ playback/remote/transcoding granted), preserving all existing allow behaviour.
 
 # Migrating Existing Jellyfin Users to OIDC
 
-If you already have Jellyfin users with watch history, favorites, playlists, etc., you can move them onto OIDC SSO without losing data — as long as the OIDC username matches the existing Jellyfin username.
+If you already have Jellyfin users with watch history, favorites, playlists, etc., you can move them onto OIDC-Auth without losing data — as long as the OIDC username matches the existing Jellyfin username.
 
 ## How it works
 
@@ -117,7 +117,7 @@ Plan your role mappings to match the access you want users to have **before** th
 
 3. **Create role mappings that grant the same access the user has today**
 
-   Open Plugins → OIDC SSO → Role Mappings. For each role/group used in your IdP, define a mapping that grants the same libraries and permissions the user has now. Use the **Test Connection** button on the provider card to confirm discovery succeeds before the first login.
+   Open Plugins → OIDC-Auth → Role Mappings. For each role/group used in your IdP, define a mapping that grants the same libraries and permissions the user has now. Use the **Test Connection** button on the provider card to confirm discovery succeeds before the first login.
 
 4. **Add the user to the right IdP group(s)**
 

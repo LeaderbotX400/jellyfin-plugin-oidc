@@ -31,10 +31,10 @@ public class RbacResyncTask : IScheduledTask
         _logger = logger;
     }
 
-    public string Name => "OIDC SSO Re-sync";
+    public string Name => "OIDC-Auth Re-sync";
     public string Key => "OidcRbacResync";
     public string Description => "Re-applies current OIDC role and entitlement mappings to all SSO-authenticated users. Run after changing role mappings to propagate without requiring re-login.";
-    public string Category => "OIDC SSO";
+    public string Category => "OIDC-Auth";
 
     public IEnumerable<TaskTriggerInfo> GetDefaultTriggers()
     {
@@ -69,7 +69,7 @@ public class RbacResyncTask : IScheduledTask
         var records = await _userStore.GetAllAsync().ConfigureAwait(false);
         if (records.Count == 0)
         {
-            _logger.LogInformation("OIDC SSO re-sync: no stored users, nothing to do");
+            _logger.LogInformation("OIDC-Auth re-sync: no stored users, nothing to do");
             progress.Report(100);
             return;
         }
@@ -78,7 +78,7 @@ public class RbacResyncTask : IScheduledTask
         // Mid-run config changes intentionally take effect only on the next run.
         PluginConfiguration configSnapshot = _configProvider.GetConfiguration();
 
-        _logger.LogInformation("OIDC SSO re-sync: processing {Count} user(s)", records.Count);
+        _logger.LogInformation("OIDC-Auth re-sync: processing {Count} user(s)", records.Count);
 
         using var scope = _scopeFactory.CreateScope();
         var rbacService = scope.ServiceProvider.GetRequiredService<RbacService>();
@@ -121,11 +121,11 @@ public class RbacResyncTask : IScheduledTask
         if (cancelled)
         {
             _logger.LogInformation(
-                "OIDC SSO re-sync cancelled after {Done}/{Total} user(s): {Success} updated, {Failure} failed",
+                "OIDC-Auth re-sync cancelled after {Done}/{Total} user(s): {Success} updated, {Failure} failed",
                 done, records.Count, successCount, failureCount);
 
             await rbacService.LogActivityAsync(
-                $"OIDC SSO re-sync cancelled: {successCount} updated, {failureCount} failed (processed {done}/{records.Count})",
+                $"OIDC-Auth re-sync cancelled: {successCount} updated, {failureCount} failed (processed {done}/{records.Count})",
                 "OidcResyncCancelled",
                 Guid.Empty,
                 null,
@@ -134,7 +134,7 @@ public class RbacResyncTask : IScheduledTask
             return;
         }
 
-        string summary = $"OIDC SSO resync complete: {successCount} updated, {failureCount} failed";
+        string summary = $"OIDC-Auth resync complete: {successCount} updated, {failureCount} failed";
 
         if (failureCount > 0)
         {

@@ -1,4 +1,4 @@
-name: "OIDC SSO"
+name: "OIDC-Auth"
 guid: "d4e5f6a7-b8c9-0d1e-2f3a-4b5c6d7e8f90"
 version: "0.1.11.0"
 targetAbi: "10.11.0.0"

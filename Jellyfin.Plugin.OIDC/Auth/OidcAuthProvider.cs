@@ -12,7 +12,7 @@ namespace Jellyfin.Plugin.OIDC.Auth;
 /// </summary>
 public class OidcAuthProvider : IAuthenticationProvider
 {
-    public string Name => "OIDC SSO";
+    public string Name => "OIDC-Auth";
 
     public bool IsEnabled => true;
 

@@ -1,4 +1,4 @@
-# Jellyfin OIDC SSO Plugin
+# Jellyfin OIDC-Auth Plugin
 
 A Jellyfin plugin providing **OpenID Connect authentication** with **role-based library access control**.
 
@@ -27,9 +27,9 @@ https://raw.githubusercontent.com/LeaderbotX400/jellyfin-plugin-oidc/manifest/ma
 ### From the Jellyfin Plugin Catalog
 
 1. Go to **Admin Dashboard > Plugins > Repositories**
-2. Click **Add repository** and paste the URL above (Repository Name: `OIDC SSO`)
+2. Click **Add repository** and paste the URL above (Repository Name: `OIDC-Auth`)
 3. Go to **Catalog > Authentication**
-4. Install **OIDC SSO**
+4. Install **OIDC-Auth**
 5. Restart Jellyfin
 
 ### Manual Installation
@@ -49,7 +49,7 @@ sudo systemctl restart jellyfin
 
 ### 1. Configure a Provider
 
-Go to **Admin Dashboard > Plugins > OIDC SSO > Providers tab**
+Go to **Admin Dashboard > Plugins > OIDC-Auth > Providers tab**
 
 | Field              | Example (Authentik)                                        |
 |--------------------|------------------------------------------------------------|

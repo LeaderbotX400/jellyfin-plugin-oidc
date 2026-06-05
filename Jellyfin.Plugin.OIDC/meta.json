@@ -1,6 +1,6 @@
 {
   "guid": "eea268ef-ea57-4462-91c4-44833ae08510",
-  "name": "OIDC SSO",
+  "name": "OIDC-Auth",
   "description": "Advanced OIDC authentication with role-based library access control",
   "overview": "OpenID Connect SSO with granular role-to-library mapping, multi-provider support, and a full admin configuration UI.",
   "owner": "LeaderbotX400",
