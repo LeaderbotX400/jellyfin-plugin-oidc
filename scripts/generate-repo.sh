@@ -29,7 +29,7 @@ fi
 cat > "$REPO_DIR/manifest.json" <<EOF
 [
   {
-    "guid": "d4e5f6a7-b8c9-0d1e-2f3a-4b5c6d7e8f90",
+    "guid": "eea268ef-ea57-4462-91c4-44833ae08510",
     "name": "OIDC-Auth",
     "description": "Advanced OIDC authentication with role-based library access control",
     "overview": "OpenID Connect SSO with role-to-library mapping, multi-provider support, and admin UI.",

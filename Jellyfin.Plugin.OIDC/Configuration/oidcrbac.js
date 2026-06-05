@@ -1,4 +1,4 @@
-var pluginId = 'd4e5f6a7-b8c9-0d1e-2f3a-4b5c6d7e8f90';
+var pluginId = 'eea268ef-ea57-4462-91c4-44833ae08510';
 var cfg = null;
 var libs = {};
 
