@@ -521,6 +521,153 @@ public sealed class OidcFlowTests : IClassFixture<MockIdpFixture>
     }
 
     // ────────────────────────────────────────────────────────────────────────
+    // WP-A: RolesFromAccessToken tests
+    // ────────────────────────────────────────────────────────────────────────
+
+    [Fact]
+    public async Task Callback_RolesOnlyInAccessToken_FlagOff_UserGetsNoRoles()
+    {
+        // Flag OFF (default): even if the access token carries roles, they must be ignored.
+        var fixture = new TestFixture(_idp);
+        fixture.ConfigProvider.Configuration.RoleMappings = new List<RoleMapping>
+        {
+            new() { RoleName = "atonly-role", IsAdmin = true, EnableMediaPlayback = true }
+        };
+        var provider = fixture.AddProvider();
+        // Explicitly ensure flag is off (default)
+        provider.RolesFromAccessToken = false;
+
+        var startResult = await fixture.Controller.Start(ProviderId);
+        var redirect = Assert.IsType<RedirectResult>(startResult);
+        var stateValue = ExtractStateFromUrl(redirect.Url);
+        var nonceValue = ExtractParamFromUrl(redirect.Url, "nonce");
+        TestFixture.PropagateCookies(fixture.Controller);
+
+        _idp.EnqueueTokenResponseWithAccessTokenRoles(
+            sub: "at-flag-off-sub",
+            username: "atflagoff",
+            nonce: nonceValue,
+            accessTokenRoles: new[] { "atonly-role" });
+
+        var callbackResult = await fixture.Controller.Callback(ProviderId, code: "at-off-code", state: stateValue);
+        Assert.IsType<ContentResult>(callbackResult);
+
+        var sessionToken = ExtractSessionTokenFromCallbackHtml((ContentResult)callbackResult);
+        await fixture.Controller.Authenticate(ProviderId, new AuthenticateRequest { Token = sessionToken, DeviceId = "dev-at-off" });
+
+        var user = fixture.UserStore.GetByName("atflagoff");
+        Assert.NotNull(user);
+        // Flag was off so the access token roles should NOT have been applied → not admin
+        Assert.False(HasPermission(user!, PermissionKind.IsAdministrator));
+    }
+
+    [Fact]
+    public async Task Callback_RolesOnlyInAccessToken_FlagOn_ValidToken_UserGetsRoles()
+    {
+        // Flag ON + correctly signed access token: roles from access token must be applied.
+        var fixture = new TestFixture(_idp);
+        fixture.ConfigProvider.Configuration.RoleMappings = new List<RoleMapping>
+        {
+            new() { RoleName = "atonly-role", IsAdmin = true, EnableMediaPlayback = true }
+        };
+        var provider = fixture.AddProvider();
+        provider.RolesFromAccessToken = true;
+
+        var startResult = await fixture.Controller.Start(ProviderId);
+        var redirect = Assert.IsType<RedirectResult>(startResult);
+        var stateValue = ExtractStateFromUrl(redirect.Url);
+        var nonceValue = ExtractParamFromUrl(redirect.Url, "nonce");
+        TestFixture.PropagateCookies(fixture.Controller);
+
+        // Access token signed with the IdP's canonical key → validation succeeds
+        _idp.EnqueueTokenResponseWithAccessTokenRoles(
+            sub: "at-flag-on-sub",
+            username: "atflagon",
+            nonce: nonceValue,
+            accessTokenRoles: new[] { "atonly-role" });
+
+        var callbackResult = await fixture.Controller.Callback(ProviderId, code: "at-on-code", state: stateValue);
+        Assert.IsType<ContentResult>(callbackResult);
+
+        var sessionToken = ExtractSessionTokenFromCallbackHtml((ContentResult)callbackResult);
+        await fixture.Controller.Authenticate(ProviderId, new AuthenticateRequest { Token = sessionToken, DeviceId = "dev-at-on" });
+
+        var user = fixture.UserStore.GetByName("atflagon");
+        Assert.NotNull(user);
+        // Flag was on and AT was valid → roles should be applied → admin
+        Assert.True(HasPermission(user!, PermissionKind.IsAdministrator));
+    }
+
+    [Fact]
+    public async Task Callback_RolesOnlyInAccessToken_FlagOn_WrongKey_LoginSucceedsNoRoles()
+    {
+        // Flag ON but access token signed with a DIFFERENT key → validation fails;
+        // login must still succeed (graceful degradation) but no roles from AT.
+        var fixture = new TestFixture(_idp);
+        fixture.ConfigProvider.Configuration.RoleMappings = new List<RoleMapping>
+        {
+            new() { RoleName = "atonly-role", IsAdmin = true, EnableMediaPlayback = true }
+        };
+        var provider = fixture.AddProvider();
+        provider.RolesFromAccessToken = true;
+
+        var startResult = await fixture.Controller.Start(ProviderId);
+        var redirect = Assert.IsType<RedirectResult>(startResult);
+        var stateValue = ExtractStateFromUrl(redirect.Url);
+        var nonceValue = ExtractParamFromUrl(redirect.Url, "nonce");
+        TestFixture.PropagateCookies(fixture.Controller);
+
+        // Generate a separate RSA key that the IdP's JWKS doesn't know about
+        var wrongKey = new Microsoft.IdentityModel.Tokens.RsaSecurityKey(
+            System.Security.Cryptography.RSA.Create(2048));
+
+        _idp.EnqueueTokenResponseWithAccessTokenRoles(
+            sub: "at-wrongkey-sub",
+            username: "atwrongkey",
+            nonce: nonceValue,
+            accessTokenRoles: new[] { "atonly-role" },
+            accessTokenSigningKey: wrongKey);
+
+        var callbackResult = await fixture.Controller.Callback(ProviderId, code: "at-wrongkey-code", state: stateValue);
+        // Login must still succeed — bad AT signature is non-fatal
+        Assert.IsType<ContentResult>(callbackResult);
+
+        var sessionToken = ExtractSessionTokenFromCallbackHtml((ContentResult)callbackResult);
+        await fixture.Controller.Authenticate(ProviderId, new AuthenticateRequest { Token = sessionToken, DeviceId = "dev-at-wk" });
+
+        var user = fixture.UserStore.GetByName("atwrongkey");
+        Assert.NotNull(user);
+        // AT validation failed → no roles → not admin
+        Assert.False(HasPermission(user!, PermissionKind.IsAdministrator));
+    }
+
+    [Fact]
+    public async Task Callback_SecurityHeaders_IncludeFrameProtection()
+    {
+        // The callback page must include X-Frame-Options: DENY and CSP frame-ancestors 'none'
+        // to prevent clickjacking via iframe embedding.
+        var fixture = new TestFixture(_idp);
+        fixture.AddProvider();
+
+        var startResult = await fixture.Controller.Start(ProviderId);
+        var redirect = Assert.IsType<RedirectResult>(startResult);
+        var stateValue = ExtractStateFromUrl(redirect.Url);
+        var nonceValue = ExtractParamFromUrl(redirect.Url, "nonce");
+        TestFixture.PropagateCookies(fixture.Controller);
+
+        _idp.EnqueueTokenResponse(sub: "frame-sub", username: "frameuser", nonce: nonceValue);
+
+        await fixture.Controller.Callback(ProviderId, code: "frame-code", state: stateValue);
+
+        var headers = fixture.Controller.ControllerContext.HttpContext.Response.Headers;
+        var xfo = headers["X-Frame-Options"].ToString();
+        var csp = headers["Content-Security-Policy"].ToString();
+
+        Assert.Equal("DENY", xfo);
+        Assert.Contains("frame-ancestors 'none'", csp);
+    }
+
+    // ────────────────────────────────────────────────────────────────────────
     // Helpers
     // ────────────────────────────────────────────────────────────────────────
 

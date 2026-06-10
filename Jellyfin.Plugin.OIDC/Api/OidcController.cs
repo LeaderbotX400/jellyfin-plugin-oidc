@@ -234,7 +234,8 @@ public class OidcController : ControllerBase
         if (tokenResponse.IsError)
         {
             _logger.LogError("Token exchange failed: {Error} {Description}",
-                tokenResponse.Error, tokenResponse.ErrorDescription);
+                LogRedaction.Sanitize(tokenResponse.Error),
+                LogRedaction.Sanitize(tokenResponse.ErrorDescription));
             return BadRequest("Token exchange failed. Check plugin logs for details.");
         }
 
@@ -333,7 +334,7 @@ public class OidcController : ControllerBase
             {
                 _logger.LogWarning(
                     "OIDC login rejected: email_verified={Value} for provider {Provider}",
-                    emailVerifiedClaim, providerId);
+                    LogRedaction.Sanitize(emailVerifiedClaim), providerId);
                 await _rbacService.LogActivityAsync(
                     "OIDC login rejected: email_verified=false",
                     "OidcLoginFailure", Guid.Empty, $"provider={providerId}",
@@ -358,12 +359,41 @@ public class OidcController : ControllerBase
 
         var displayName = ClaimParser.ExtractClaim(idToken, provider.DisplayNameClaim);
 
-        // Extract roles; fall back to access token for non-standard IdPs
+        // Extract roles; optionally fall back to a fully-validated access token.
+        // The flag is off by default: access tokens are resource-server tokens and
+        // their audience/signing may differ from the id_token, so reading them
+        // without validation is a security risk.
         var roles = ClaimParser.ExtractRoles(idToken, provider.RoleClaim);
-        if (roles.Length == 0 && handler.CanReadToken(tokenResponse.AccessToken))
+        if (roles.Length == 0 && provider.RolesFromAccessToken && handler.CanReadToken(tokenResponse.AccessToken))
         {
-            var accessToken = handler.ReadJwtToken(tokenResponse.AccessToken);
-            roles = ClaimParser.ExtractRoles(accessToken, provider.RoleClaim);
+            // Validate the access token with the same signing keys + issuer as the id_token,
+            // but skip audience validation because access-token aud is the resource server,
+            // not the OIDC client_id.
+            var atValidationParameters = new TokenValidationParameters
+            {
+                ValidIssuer = disco.Issuer,
+                IssuerSigningKeys = signingKeys,
+                ValidAlgorithms = provider.AllowedSigningAlgorithms,
+                ValidateIssuer = true,
+                ValidateAudience = false,
+                ValidateLifetime = true,
+                ValidateIssuerSigningKey = true,
+                RequireSignedTokens = true,
+                ClockSkew = TimeSpan.FromSeconds(30)
+            };
+            try
+            {
+                handler.ValidateToken(tokenResponse.AccessToken, atValidationParameters, out var validatedAt);
+                var validatedAccessToken = (JwtSecurityToken)validatedAt;
+                roles = ClaimParser.ExtractRoles(validatedAccessToken, provider.RoleClaim);
+            }
+            catch (SecurityTokenException ex)
+            {
+                _logger.LogWarning(
+                    "Access token validation failed for provider {Provider}; skipping access-token roles: {Message}",
+                    providerId,
+                    LogRedaction.Sanitize(ex.Message));
+            }
         }
 
         // A.3 — apply claim transforms before role matching
@@ -899,9 +929,10 @@ public class OidcController : ControllerBase
         // here is the value-side hardening: every interpolation is JSON-encoded and the
         // provider id charset is validated at config-save time.
         Response.Headers["Content-Security-Policy"] =
-            "default-src 'none'; script-src 'unsafe-inline'; connect-src 'self'; style-src 'unsafe-inline'";
+            "default-src 'none'; script-src 'unsafe-inline'; connect-src 'self'; style-src 'unsafe-inline'; frame-ancestors 'none'";
         Response.Headers["X-Content-Type-Options"] = "nosniff";
         Response.Headers["Referrer-Policy"] = "no-referrer";
+        Response.Headers["X-Frame-Options"] = "DENY";
     }
 
     private static string BuildCallbackHtml(string sessionToken, string providerId)
