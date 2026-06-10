@@ -89,6 +89,7 @@ internal sealed class TestFixture
         SamlController = new SamlController(
             userSyncService,
             StateManager,
+            sessionManagerMock.Object,
             RbacService,
             ConfigProvider,
             SamlReplayCache,
