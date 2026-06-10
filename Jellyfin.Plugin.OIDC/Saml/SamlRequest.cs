@@ -36,7 +36,7 @@ public static class SamlRequest
         writer.WriteStartElement("samlp", "AuthnRequest", "urn:oasis:names:tc:SAML:2.0:protocol");
         writer.WriteAttributeString("ID", requestId);
         writer.WriteAttributeString("Version", "2.0");
-        writer.WriteAttributeString("IssueInstant", DateTime.UtcNow.ToString("yyyy-MM-ddTHH:mm:ssZ"));
+        writer.WriteAttributeString("IssueInstant", DateTime.UtcNow.ToString("yyyy-MM-ddTHH:mm:ssZ", System.Globalization.CultureInfo.InvariantCulture));
         writer.WriteAttributeString("AssertionConsumerServiceURL", acsUrl);
         writer.WriteAttributeString("ProtocolBinding", "urn:oasis:names:tc:SAML:2.0:bindings:HTTP-POST");
         writer.WriteAttributeString("xmlns", "saml", null, "urn:oasis:names:tc:SAML:2.0:assertion");

@@ -218,14 +218,14 @@ public class PluginConfiguration : BasePluginConfiguration
     /// via RBAC. Set to true only as a deliberate escape hatch (e.g. you are demoting yourself and
     /// have another way in). Reset to false after use.
     /// </summary>
-    public bool AllowLastAdminDemotion { get; set; } = false;
+    public bool AllowLastAdminDemotion { get; set; }
 
     /// <summary>
     /// DANGER — enables full PII logging to the server log (role lists, sub values, email addresses).
     /// Only enable temporarily for debugging. All other admins who can read server logs will be able
     /// to see arbitrary group memberships and user identifiers. Default false.
     /// </summary>
-    public bool VerboseClaimLogging { get; set; } = false;
+    public bool VerboseClaimLogging { get; set; }
 
     /// <summary>
     /// Sentinel for the one-time v0.1.3 deny-mapping migration (see <see cref="Services.ConfigMigration"/>).
@@ -234,7 +234,7 @@ public class PluginConfiguration : BasePluginConfiguration
     /// on every save — round-tripping a per-mapping sentinel made every save re-run the migration and
     /// wipe deliberately-set deny flags.
     /// </summary>
-    public bool MigratedDenyDefaultsV013 { get; set; } = false;
+    public bool MigratedDenyDefaultsV013 { get; set; }
 
     /// <summary>
     /// When true, the callback rate limiter and audit log will honor <c>X-Forwarded-For</c>
@@ -243,7 +243,7 @@ public class PluginConfiguration : BasePluginConfiguration
     /// otherwise every request looks like it comes from the proxy and a single failed-login
     /// burst bans the proxy IP, locking out all users. Default false.
     /// </summary>
-    public bool TrustForwardedHeaders { get; set; } = false;
+    public bool TrustForwardedHeaders { get; set; }
 
     /// <summary>
     /// CIDR ranges (e.g. <c>10.0.0.0/8</c>, <c>192.168.0.0/16</c>, <c>::1/128</c>) for the

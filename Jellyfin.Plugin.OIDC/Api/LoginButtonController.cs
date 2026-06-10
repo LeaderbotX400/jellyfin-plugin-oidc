@@ -1,3 +1,4 @@
+using System.Globalization;
 using System.Linq;
 using System.Text;
 using System.Text.Json;
@@ -45,11 +46,11 @@ public class LoginButtonController : ControllerBase
             var jsonLabel = JsonSerializer.Serialize("Sign in with " + p.DisplayName);
             var jsonCss = JsonSerializer.Serialize(
                 $"display:block;margin:0.5em auto;padding:0.7em 1.5em;background:{p.ButtonColor};color:#fff;text-decoration:none;border-radius:4px;font-size:1em;max-width:300px;");
-            sb.AppendLine($"    var btn_{p.ProviderId} = document.createElement('a');");
-            sb.AppendLine($"    btn_{p.ProviderId}.href = '/sso/OIDC/Start/{p.ProviderId}';");
-            sb.AppendLine($"    btn_{p.ProviderId}.textContent = {jsonLabel};");
-            sb.AppendLine($"    btn_{p.ProviderId}.style.cssText = {jsonCss};");
-            sb.AppendLine($"    container.appendChild(btn_{p.ProviderId});");
+            sb.AppendLine(CultureInfo.InvariantCulture, $"    var btn_{p.ProviderId} = document.createElement('a');");
+            sb.AppendLine(CultureInfo.InvariantCulture, $"    btn_{p.ProviderId}.href = '/sso/OIDC/Start/{p.ProviderId}';");
+            sb.AppendLine(CultureInfo.InvariantCulture, $"    btn_{p.ProviderId}.textContent = {jsonLabel};");
+            sb.AppendLine(CultureInfo.InvariantCulture, $"    btn_{p.ProviderId}.style.cssText = {jsonCss};");
+            sb.AppendLine(CultureInfo.InvariantCulture, $"    container.appendChild(btn_{p.ProviderId});");
         }
 
         sb.AppendLine("    var sep = document.createElement('div');");

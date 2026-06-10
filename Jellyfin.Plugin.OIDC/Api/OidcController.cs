@@ -812,8 +812,7 @@ public class OidcController : ControllerBase
         // RFC 7636 §4.2: BASE64URL(SHA256(ASCII(code_verifier))).
         // CryptoRandom.CreateUniqueId only produces ASCII-safe characters, so UTF-8
         // and ASCII are equivalent here — but UTF-8 is spec-correct for the general case.
-        using var sha256 = SHA256.Create();
-        var hash = sha256.ComputeHash(Encoding.UTF8.GetBytes(codeVerifier));
+        var hash = SHA256.HashData(Encoding.UTF8.GetBytes(codeVerifier));
         return Base64UrlEncoder.Encode(hash);
     }
 
