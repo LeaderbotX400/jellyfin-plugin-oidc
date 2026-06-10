@@ -1,13 +1,17 @@
 using System.Collections.Generic;
 using System.Linq;
+using Jellyfin.Plugin.OIDC.Api;
 using Jellyfin.Plugin.OIDC.Configuration;
+using Microsoft.AspNetCore.Mvc;
+using Microsoft.Extensions.Logging.Abstractions;
+using Moq;
 using Xunit;
 
 namespace Jellyfin.Plugin.OIDC.Integration.Tests;
 
 /// <summary>
-/// Tests for the transform→admin-role warning logic that ConfigController.ValidateConfig produces.
-/// The detection logic is tested in isolation here (no HTTP layer) to keep tests fast.
+/// Tests for the transform→admin-role warning logic that ConfigController.ValidateConfig produces,
+/// as well as SAML EntityId warnings and the interpolation fix for the FromValue placeholder.
 /// </summary>
 public class ConfigValidationTests
 {
@@ -37,6 +41,41 @@ public class ConfigValidationTests
         }
 
         return warnings;
+    }
+
+    /// <summary>
+    /// Creates a <see cref="ConfigController"/> wired with NullLogger and no-op fakes.
+    /// Sufficient for calling ValidateConfig which only uses the logger.
+    /// </summary>
+    private static ConfigController BuildController()
+    {
+        var configProviderMock = new Mock<Services.IPluginConfigProvider>();
+        configProviderMock.Setup(c => c.GetConfiguration()).Returns(new PluginConfiguration());
+
+        var rbacService = new Services.RbacService(
+            FakeJellyfinFactory.CreateUserManager(new FakeUserStore()).Object,
+            FakeJellyfinFactory.CreateLibraryManager().Object,
+            FakeJellyfinFactory.CreateActivityManager().Object,
+            configProviderMock.Object,
+            NullLogger<Services.RbacService>.Instance);
+
+        return new ConfigController(
+            rbacService,
+            new FakeHttpClientFactory(),
+            configProviderMock.Object,
+            new Services.OidcUserStore(System.IO.Path.Combine(System.IO.Path.GetTempPath(), $"oidc-ctrl-test-{System.Guid.NewGuid():N}.json")),
+            NullLogger<ConfigController>.Instance);
+    }
+
+    /// <summary>Calls <see cref="ConfigController.ValidateConfig"/> and returns the warnings list.</summary>
+    private static List<string> GetControllerWarnings(PluginConfiguration config)
+    {
+        var ctrl = BuildController();
+        var result = ctrl.ValidateConfig(config);
+        var ok = Assert.IsType<OkObjectResult>(result);
+        // anonymous type — use reflection to get Warnings
+        var warnings = (IEnumerable<string>)ok.Value!.GetType().GetProperty("Warnings")!.GetValue(ok.Value)!;
+        return warnings.ToList();
     }
 
     [Fact]
@@ -171,5 +210,157 @@ public class ConfigValidationTests
 
         var warnings = DetectWarnings(config);
         Assert.Empty(warnings);
+    }
+
+    // ── SAML EntityId / IdpEntityId warnings ──────────────────────────────────────────────────
+
+    [Fact]
+    public void ValidateConfig_EnabledSamlProvider_MissingEntityId_ProducesWarning()
+    {
+        var config = new PluginConfiguration
+        {
+            SamlProviders = new List<SamlProviderConfig>
+            {
+                new()
+                {
+                    Id = "okta-saml",
+                    EntityId = "",          // empty — audience validation will be skipped
+                    IdpEntityId = "https://idp.example.com",
+                    Enabled = true
+                }
+            }
+        };
+
+        var warnings = GetControllerWarnings(config);
+
+        Assert.Contains(warnings, w =>
+            w.Contains("okta-saml") &&
+            w.Contains("SP EntityID") &&
+            w.Contains("audience validation will be SKIPPED"));
+    }
+
+    [Fact]
+    public void ValidateConfig_EnabledSamlProvider_MissingIdpEntityId_ProducesWarning()
+    {
+        var config = new PluginConfiguration
+        {
+            SamlProviders = new List<SamlProviderConfig>
+            {
+                new()
+                {
+                    Id = "okta-saml",
+                    EntityId = "https://jellyfin.example.com",
+                    IdpEntityId = "",       // empty — issuer validation will be skipped
+                    Enabled = true
+                }
+            }
+        };
+
+        var warnings = GetControllerWarnings(config);
+
+        Assert.Contains(warnings, w =>
+            w.Contains("okta-saml") &&
+            w.Contains("IdP EntityID") &&
+            w.Contains("issuer validation will be SKIPPED"));
+    }
+
+    [Fact]
+    public void ValidateConfig_EnabledSamlProvider_BothEntityIdsEmpty_ProducesTwoWarnings()
+    {
+        var config = new PluginConfiguration
+        {
+            SamlProviders = new List<SamlProviderConfig>
+            {
+                new()
+                {
+                    Id = "saml-p1",
+                    EntityId = "",
+                    IdpEntityId = "",
+                    Enabled = true
+                }
+            }
+        };
+
+        var warnings = GetControllerWarnings(config);
+
+        Assert.Equal(2, warnings.Count(w => w.Contains("saml-p1")));
+    }
+
+    [Fact]
+    public void ValidateConfig_DisabledSamlProvider_MissingEntityIds_NoWarning()
+    {
+        // Disabled providers are not in active use — don't spam warnings about them.
+        var config = new PluginConfiguration
+        {
+            SamlProviders = new List<SamlProviderConfig>
+            {
+                new()
+                {
+                    Id = "saml-off",
+                    EntityId = "",
+                    IdpEntityId = "",
+                    Enabled = false
+                }
+            }
+        };
+
+        var warnings = GetControllerWarnings(config);
+
+        Assert.DoesNotContain(warnings, w => w.Contains("saml-off"));
+    }
+
+    [Fact]
+    public void ValidateConfig_EnabledSamlProvider_BothEntityIdsPopulated_NoWarning()
+    {
+        var config = new PluginConfiguration
+        {
+            SamlProviders = new List<SamlProviderConfig>
+            {
+                new()
+                {
+                    Id = "saml-full",
+                    EntityId = "https://jellyfin.example.com",
+                    IdpEntityId = "https://idp.example.com",
+                    Enabled = true
+                }
+            }
+        };
+
+        var warnings = GetControllerWarnings(config);
+
+        Assert.DoesNotContain(warnings, w => w.Contains("saml-full"));
+    }
+
+    // ── Interpolation regression: FromValue must appear literally in admin-transform warning ──
+
+    [Fact]
+    public void ValidateConfig_AdminTransformWarning_ContainsActualFromValue()
+    {
+        // Regression: the third string segment of the warning message previously lacked the `$`
+        // prefix so '{transform.FromValue}' was emitted literally instead of the actual value.
+        var config = new PluginConfiguration
+        {
+            RoleMappings = new List<RoleMapping>
+            {
+                new() { RoleName = "admins", IsAdmin = true }
+            },
+            Providers = new List<OidcProviderConfig>
+            {
+                new()
+                {
+                    ProviderId = "myidp",
+                    RoleTransforms = new List<ClaimTransform>
+                    {
+                        new() { FromValue = "cn=admins,dc=example,dc=com", ToValue = "admins" }
+                    }
+                }
+            }
+        };
+
+        var warnings = GetControllerWarnings(config);
+
+        // The actual FromValue must appear in the message — not the literal '{transform.FromValue}'.
+        Assert.Contains(warnings, w => w.Contains("cn=admins,dc=example,dc=com"));
+        Assert.DoesNotContain(warnings, w => w.Contains("{transform.FromValue}"));
     }
 }
