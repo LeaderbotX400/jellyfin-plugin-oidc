@@ -106,7 +106,8 @@ public static class ConfigMasking
                         ToValue = t.ToValue
                     }).ToList(),
                     RequiredAmrValues = new List<string>(p.RequiredAmrValues),
-                    RequiredAcrValues = new List<string>(p.RequiredAcrValues)
+                    RequiredAcrValues = new List<string>(p.RequiredAcrValues),
+                    RolesFromAccessToken = p.RolesFromAccessToken
                 };
                 MaskSecretProperties(copy);
                 return copy;
@@ -309,6 +310,15 @@ public class OidcProviderConfig
 
     /// <summary>Reject authentication if the id_token does not contain email_verified=true.</summary>
     public bool RequireEmailVerified { get; set; }
+
+    /// <summary>
+    /// When true, and the id_token contains no roles, roles are read from the access token
+    /// after full signature and issuer validation (audience validation is skipped because
+    /// access-token <c>aud</c> is the resource server, not the client).
+    /// Default false — reading the access token without validation is a security risk for
+    /// most IdP configurations, so this must be explicitly opted in to.
+    /// </summary>
+    public bool RolesFromAccessToken { get; set; }
 
     /// <summary>Transforms applied to extracted roles before matching against RoleMappings.</summary>
     public List<ClaimTransform> RoleTransforms { get; set; } = new();

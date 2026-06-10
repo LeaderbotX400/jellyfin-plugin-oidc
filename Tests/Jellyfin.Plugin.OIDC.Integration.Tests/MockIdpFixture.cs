@@ -250,4 +250,74 @@ public sealed class MockIdpFixture : IAsyncLifetime
     }
 
     public RsaSecurityKey SigningKey => _signingKey;
+
+    /// <summary>
+    /// Stubs /token with an ID token that has NO roles and a signed JWT access token
+    /// that carries the supplied <paramref name="accessTokenRoles"/>. Used to test
+    /// the <c>RolesFromAccessToken</c> feature path.
+    /// </summary>
+    /// <param name="accessTokenSigningKey">
+    /// Key to sign the access token. Pass <see langword="null"/> to use the IdP's
+    /// canonical key (valid). Pass a different RSA key to simulate a wrong-key scenario.
+    /// </param>
+    public void EnqueueTokenResponseWithAccessTokenRoles(
+        string sub,
+        string username,
+        string nonce,
+        IEnumerable<string> accessTokenRoles,
+        RsaSecurityKey? accessTokenSigningKey = null)
+    {
+        // ID token: no roles claim
+        var idClaims = new List<Claim>
+        {
+            new("sub", sub),
+            new("aud", ClientId),
+            new("iss", Issuer),
+            new("preferred_username", username),
+            new("nonce", nonce)
+        };
+        var idCreds = new SigningCredentials(_signingKey, SecurityAlgorithms.RsaSha256);
+        var idJwt = new JwtSecurityToken(
+            issuer: Issuer,
+            audience: ClientId,
+            claims: idClaims,
+            notBefore: DateTime.UtcNow.AddMinutes(-1),
+            expires: DateTime.UtcNow.AddMinutes(5),
+            signingCredentials: idCreds);
+        var idToken = new JwtSecurityTokenHandler().WriteToken(idJwt);
+
+        // Access token: carries roles, signed with the requested key
+        var atKey = accessTokenSigningKey ?? _signingKey;
+        var atClaims = new List<Claim>
+        {
+            new("sub", sub),
+            new("iss", Issuer),
+            new("aud", "resource-server")
+        };
+        foreach (var r in accessTokenRoles) atClaims.Add(new Claim("roles", r));
+
+        var atCreds = new SigningCredentials(atKey, SecurityAlgorithms.RsaSha256);
+        var atJwt = new JwtSecurityToken(
+            issuer: Issuer,
+            audience: "resource-server",
+            claims: atClaims,
+            notBefore: DateTime.UtcNow.AddMinutes(-1),
+            expires: DateTime.UtcNow.AddMinutes(5),
+            signingCredentials: atCreds);
+        var accessToken = new JwtSecurityTokenHandler().WriteToken(atJwt);
+
+        var tokenResponse = new
+        {
+            access_token = accessToken,
+            id_token = idToken,
+            token_type = "Bearer",
+            expires_in = 3600
+        };
+
+        Server.Given(Request.Create().WithPath("/token").UsingPost())
+              .RespondWith(Response.Create()
+                  .WithStatusCode(200)
+                  .WithHeader("Content-Type", "application/json")
+                  .WithBody(JsonSerializer.Serialize(tokenResponse)));
+    }
 }
