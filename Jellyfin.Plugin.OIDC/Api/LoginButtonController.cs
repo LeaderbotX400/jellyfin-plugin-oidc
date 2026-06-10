@@ -44,12 +44,18 @@ public class LoginButtonController : ControllerBase
             // single-quote + Replace("'", "\\'") approach missed.
             // ProviderId is regex-constrained [A-Za-z0-9_-]{1,64} at config-save time and is safe raw.
             var jsonLabel = JsonSerializer.Serialize("Sign in with " + p.DisplayName);
+            // ButtonColor is admin-configured but unvalidated, so it must never be embedded in a
+            // larger CSS string (a value like "red;}body{..." would inject arbitrary CSS via
+            // cssText). Assigning style.background directly confines it to a single property
+            // value — CSSOM cannot escape a property assignment into other properties/selectors.
             var jsonCss = JsonSerializer.Serialize(
-                $"display:block;margin:0.5em auto;padding:0.7em 1.5em;background:{p.ButtonColor};color:#fff;text-decoration:none;border-radius:4px;font-size:1em;max-width:300px;");
+                "display:block;margin:0.5em auto;padding:0.7em 1.5em;color:#fff;text-decoration:none;border-radius:4px;font-size:1em;max-width:300px;");
+            var jsonColor = JsonSerializer.Serialize(p.ButtonColor);
             sb.AppendLine(CultureInfo.InvariantCulture, $"    var btn_{p.ProviderId} = document.createElement('a');");
             sb.AppendLine(CultureInfo.InvariantCulture, $"    btn_{p.ProviderId}.href = '/sso/OIDC/Start/{p.ProviderId}';");
             sb.AppendLine(CultureInfo.InvariantCulture, $"    btn_{p.ProviderId}.textContent = {jsonLabel};");
             sb.AppendLine(CultureInfo.InvariantCulture, $"    btn_{p.ProviderId}.style.cssText = {jsonCss};");
+            sb.AppendLine(CultureInfo.InvariantCulture, $"    btn_{p.ProviderId}.style.background = {jsonColor};");
             sb.AppendLine(CultureInfo.InvariantCulture, $"    container.appendChild(btn_{p.ProviderId});");
         }
 

@@ -387,7 +387,10 @@ public class OidcController : ControllerBase
                 var validatedAccessToken = (JwtSecurityToken)validatedAt;
                 roles = ClaimParser.ExtractRoles(validatedAccessToken, provider.RoleClaim);
             }
-            catch (SecurityTokenException ex)
+            // ArgumentException covers malformed/oversized tokens that CanReadToken does not
+            // screen out (e.g. > MaximumTokenSizeInBytes); a bad access token must degrade to
+            // zero roles, never fail the login.
+            catch (Exception ex) when (ex is SecurityTokenException or ArgumentException)
             {
                 _logger.LogWarning(
                     "Access token validation failed for provider {Provider}; skipping access-token roles: {Message}",
