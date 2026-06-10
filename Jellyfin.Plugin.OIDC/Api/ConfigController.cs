@@ -127,13 +127,37 @@ public class ConfigController : ControllerBase
                     {
                         var msg = $"Provider '{provider.ProviderId}': transform from='{transform.FromValue}' " +
                                   $"to='{transform.ToValue}' maps into an admin role mapping. " +
-                                  "Any IdP user with the '{transform.FromValue}' role will become a Jellyfin administrator.";
+                                  $"Any IdP user with the '{transform.FromValue}' role will become a Jellyfin administrator.";
                         warnings.Add(msg);
                         _logger.LogWarning(
                             "Config warning: provider={Provider} transform from={From} to={To} targets admin role",
                             provider.ProviderId, transform.FromValue, transform.ToValue);
                     }
                 }
+            }
+        }
+
+        // SAML EntityId / IdpEntityId warnings — warn only, never block save.
+        foreach (var saml in proposedConfig?.SamlProviders ?? new List<SamlProviderConfig>())
+        {
+            if (!saml.Enabled) continue;
+
+            if (string.IsNullOrWhiteSpace(saml.EntityId))
+            {
+                warnings.Add(
+                    $"SAML provider '{saml.Id}': SP EntityID is empty — audience validation will be SKIPPED for this provider.");
+                _logger.LogWarning(
+                    "Config warning: SAML provider={Provider} has empty EntityId — audience validation skipped",
+                    saml.Id);
+            }
+
+            if (string.IsNullOrWhiteSpace(saml.IdpEntityId))
+            {
+                warnings.Add(
+                    $"SAML provider '{saml.Id}': IdP EntityID is empty — issuer validation will be SKIPPED for this provider.");
+                _logger.LogWarning(
+                    "Config warning: SAML provider={Provider} has empty IdpEntityId — issuer validation skipped",
+                    saml.Id);
             }
         }
 

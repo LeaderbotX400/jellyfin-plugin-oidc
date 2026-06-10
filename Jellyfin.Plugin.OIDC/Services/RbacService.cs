@@ -71,7 +71,7 @@ public class RbacService
 
         var preview = ComputePermissions(userRoles, entitlements, providerId, config);
 
-        if (preview.MatchedGrantMappings.Length == 0 && !preview.ParsedEntitlements.Any())
+        if (preview.MatchedGrantMappings.Length == 0 && preview.ParsedEntitlements.Length == 0)
         {
             var verbose = _configProvider.GetConfiguration().VerboseClaimLogging;
             _logger.LogInformation(
@@ -113,7 +113,7 @@ public class RbacService
         string libsStr = preview.EnableAllLibraries switch
         {
             true => "ALL",
-            false => (preview.Libraries?.Count ?? 0).ToString(),
+            false => (preview.Libraries?.Count ?? 0).ToString(System.Globalization.CultureInfo.InvariantCulture),
             null => "unchanged",
         };
 
@@ -166,7 +166,7 @@ public class RbacService
     /// <c>p.IsAdmin</c> unmodified. The last-admin lockout guard sets this to <c>true</c> when it
     /// refuses to demote; all other permissions in <paramref name="p"/> are applied normally.
     /// </param>
-    private void ApplyToUser(
+    private static void ApplyToUser(
         Jellyfin.Database.Implementations.Entities.User user,
         PermissionPreview p,
         bool? effectiveIsAdmin = null)

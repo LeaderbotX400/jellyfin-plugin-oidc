@@ -77,4 +77,48 @@ public class ClaimParserTests
         var roles = ClaimParser.ExtractRoles(token, "groups");
         Assert.Empty(roles);
     }
+
+    // ── Malformed / hostile payload tests ──────────────────────────────────
+
+    [Fact]
+    public void ExtractRoles_MalformedJsonInNestedClaim_ReturnsEmpty()
+    {
+        // Root claim present but contains invalid JSON — should swallow and return empty
+        var token = BuildToken([new Claim("realm_access", "NOT_JSON{{{")]);
+        var roles = ClaimParser.ExtractRoles(token, "realm_access.roles");
+        Assert.Empty(roles);
+    }
+
+    [Fact]
+    public void ExtractRoles_MalformedJsonInFlatArrayClaim_ReturnsEmpty()
+    {
+        // Single claim whose value looks like a JSON array but is malformed
+        var token = BuildToken([new Claim("roles", "[bad json")]);
+        var roles = ClaimParser.ExtractRoles(token, "roles");
+        // The bad JSON should be treated as a plain string value (not parsed as array)
+        // because it doesn't start with '[' after TrimStart... actually it does start with '['.
+        // The ParseJsonStringArray catch should swallow the JsonException and return empty.
+        Assert.Empty(roles);
+    }
+
+    [Fact]
+    public void ExtractRoles_NestedClaimMissingSubKey_ReturnsEmpty()
+    {
+        // Root claim is valid JSON but doesn't contain the expected sub-key
+        var json = JsonSerializer.Serialize(new { other_key = new[] { "admin" } });
+        var token = BuildToken([new Claim("realm_access", json)]);
+        var roles = ClaimParser.ExtractRoles(token, "realm_access.roles");
+        Assert.Empty(roles);
+    }
+
+    [Fact]
+    public void ExtractRoles_NestedClaimValueIsNotArray_ReturnsSingleValue()
+    {
+        // When the nested path resolves to a string rather than array, it's returned as one element
+        var json = JsonSerializer.Serialize(new { roles = "single_role" });
+        var token = BuildToken([new Claim("realm_access", json)]);
+        var roles = ClaimParser.ExtractRoles(token, "realm_access.roles");
+        Assert.Single(roles);
+        Assert.Equal("single_role", roles[0]);
+    }
 }

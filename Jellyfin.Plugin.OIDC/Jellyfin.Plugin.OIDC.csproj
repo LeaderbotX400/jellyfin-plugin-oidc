@@ -10,6 +10,19 @@
     <Version>0.1.11.0</Version>
     <AssemblyVersion>0.1.11.0</AssemblyVersion>
     <FileVersion>0.1.11.0</FileVersion>
+    <!-- Static analysis: enable built-in NetAnalyzers at the recommended rule set -->
+    <AnalysisLevel>latest-recommended</AnalysisLevel>
+    <!-- Treat nullable warnings as hard errors; all CS86xx must be fixed, not suppressed -->
+    <WarningsAsErrors>nullable</WarningsAsErrors>
+    <NoWarn>
+      $(NoWarn);
+      <!-- CA1848: LoggerMessage delegates — performance micro-opt out of scope for a plugin this size (~35 call sites) -->
+      CA1848;
+      <!-- CA1873: Expensive logger argument evaluation — same family as CA1848; suppressed together -->
+      CA1873;
+      <!-- CA1707: logout_token parameter underscore — required by OIDC back-channel logout spec (RFC 9457 / OIDC Session) -->
+      CA1707
+    </NoWarn>
   </PropertyGroup>
 
   <ItemGroup>

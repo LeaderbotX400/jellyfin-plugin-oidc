@@ -106,7 +106,8 @@ public static class ConfigMasking
                         ToValue = t.ToValue
                     }).ToList(),
                     RequiredAmrValues = new List<string>(p.RequiredAmrValues),
-                    RequiredAcrValues = new List<string>(p.RequiredAcrValues)
+                    RequiredAcrValues = new List<string>(p.RequiredAcrValues),
+                    RolesFromAccessToken = p.RolesFromAccessToken
                 };
                 MaskSecretProperties(copy);
                 return copy;
@@ -217,14 +218,14 @@ public class PluginConfiguration : BasePluginConfiguration
     /// via RBAC. Set to true only as a deliberate escape hatch (e.g. you are demoting yourself and
     /// have another way in). Reset to false after use.
     /// </summary>
-    public bool AllowLastAdminDemotion { get; set; } = false;
+    public bool AllowLastAdminDemotion { get; set; }
 
     /// <summary>
     /// DANGER — enables full PII logging to the server log (role lists, sub values, email addresses).
     /// Only enable temporarily for debugging. All other admins who can read server logs will be able
     /// to see arbitrary group memberships and user identifiers. Default false.
     /// </summary>
-    public bool VerboseClaimLogging { get; set; } = false;
+    public bool VerboseClaimLogging { get; set; }
 
     /// <summary>
     /// Sentinel for the one-time v0.1.3 deny-mapping migration (see <see cref="Services.ConfigMigration"/>).
@@ -233,7 +234,7 @@ public class PluginConfiguration : BasePluginConfiguration
     /// on every save — round-tripping a per-mapping sentinel made every save re-run the migration and
     /// wipe deliberately-set deny flags.
     /// </summary>
-    public bool MigratedDenyDefaultsV013 { get; set; } = false;
+    public bool MigratedDenyDefaultsV013 { get; set; }
 
     /// <summary>
     /// When true, the callback rate limiter and audit log will honor <c>X-Forwarded-For</c>
@@ -242,7 +243,7 @@ public class PluginConfiguration : BasePluginConfiguration
     /// otherwise every request looks like it comes from the proxy and a single failed-login
     /// burst bans the proxy IP, locking out all users. Default false.
     /// </summary>
-    public bool TrustForwardedHeaders { get; set; } = false;
+    public bool TrustForwardedHeaders { get; set; }
 
     /// <summary>
     /// CIDR ranges (e.g. <c>10.0.0.0/8</c>, <c>192.168.0.0/16</c>, <c>::1/128</c>) for the
@@ -309,6 +310,15 @@ public class OidcProviderConfig
 
     /// <summary>Reject authentication if the id_token does not contain email_verified=true.</summary>
     public bool RequireEmailVerified { get; set; }
+
+    /// <summary>
+    /// When true, and the id_token contains no roles, roles are read from the access token
+    /// after full signature and issuer validation (audience validation is skipped because
+    /// access-token <c>aud</c> is the resource server, not the client).
+    /// Default false — reading the access token without validation is a security risk for
+    /// most IdP configurations, so this must be explicitly opted in to.
+    /// </summary>
+    public bool RolesFromAccessToken { get; set; }
 
     /// <summary>Transforms applied to extracted roles before matching against RoleMappings.</summary>
     public List<ClaimTransform> RoleTransforms { get; set; } = new();

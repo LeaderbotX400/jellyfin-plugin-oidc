@@ -175,6 +175,9 @@ function renderProviders(view) {
                 chk('prov_enabled_' + idx, 'Enabled', p.Enabled !== false) +
                 chk('prov_entitlements_' + idx, 'Enable entitlements', p.EnableEntitlements !== false) +
                 chk('prov_emailverified_' + idx, 'Require email_verified claim', p.RequireEmailVerified) +
+                chkDesc('prov_rolesfromat_' + idx, 'Read roles from access token (validated) when ID token has none',
+                    p.RolesFromAccessToken,
+                    'When enabled and the ID token contains no roles, roles are extracted from the access token after full signature/issuer validation. Leave off unless your IdP places roles only in the access token.') +
                 chk('prov_autolinkemail_' + idx, 'Auto-link to local user by verified email (DANGEROUS — see docs)', p.AutoLinkByVerifiedEmail) +
                 chk('prov_enforcessolink_' + idx, 'Enforce SSO-only on auto-link (disables local password)', p.EnforceSsoOnLink)
             ) +
@@ -478,6 +481,7 @@ function collectProviders(view) {
             EntitlementPrefix: gval(view, 'prov_entprefix_' + idx) || 'jellyfin:',
             EnableEntitlements: gchk(view, 'prov_entitlements_' + idx),
             RequireEmailVerified: gchk(view, 'prov_emailverified_' + idx),
+            RolesFromAccessToken: gchk(view, 'prov_rolesfromat_' + idx),
             AutoLinkByVerifiedEmail: gchk(view, 'prov_autolinkemail_' + idx),
             EnforceSsoOnLink: gchk(view, 'prov_enforcessolink_' + idx),
             Enabled: gchk(view, 'prov_enabled_' + idx),
@@ -622,6 +626,7 @@ export default function (view) {
             ButtonIcon: '', AdditionalParameters: '',
             EntitlementClaim: 'entitlements', EntitlementPrefix: 'jellyfin:',
             EnableEntitlements: true, RequireEmailVerified: false,
+            RolesFromAccessToken: false,
             AutoLinkByVerifiedEmail: false, EnforceSsoOnLink: false,
             RoleTransforms: [],
             AllowInsecureAuthority: false,
