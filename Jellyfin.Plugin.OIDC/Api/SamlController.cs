@@ -2,9 +2,11 @@ using System;
 using System.Linq;
 using System.Text.Json;
 using System.Threading.Tasks;
+using Jellyfin.Plugin.OIDC;
 using Jellyfin.Plugin.OIDC.Configuration;
 using Jellyfin.Plugin.OIDC.Saml;
 using Jellyfin.Plugin.OIDC.Services;
+using MediaBrowser.Controller.Session;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.Extensions.Logging;
 
@@ -27,6 +29,7 @@ public class SamlController : ControllerBase
 
     private readonly UserSyncService _userSyncService;
     private readonly StateManager _stateManager;
+    private readonly ISessionManager _sessionManager;
     private readonly RbacService _rbacService;
     private readonly IPluginConfigProvider _configProvider;
     private readonly SamlAssertionReplayCache _replayCache;
@@ -35,6 +38,7 @@ public class SamlController : ControllerBase
     public SamlController(
         UserSyncService userSyncService,
         StateManager stateManager,
+        ISessionManager sessionManager,
         RbacService rbacService,
         IPluginConfigProvider configProvider,
         SamlAssertionReplayCache replayCache,
@@ -42,6 +46,7 @@ public class SamlController : ControllerBase
     {
         _userSyncService = userSyncService;
         _stateManager = stateManager;
+        _sessionManager = sessionManager;
         _rbacService = rbacService;
         _configProvider = configProvider;
         _replayCache = replayCache;
@@ -188,9 +193,10 @@ public class SamlController : ControllerBase
             return BadRequest("Could not determine username from SAML assertion");
         }
 
+        var verbose = _configProvider.GetConfiguration().VerboseClaimLogging;
         _logger.LogInformation(
-            "SAML auth successful: user={Username}, roles=[{Roles}], provider={Provider}",
-            username, string.Join(", ", assertion.Roles), providerId);
+            "SAML auth successful: user={Username}, roles={Roles}, provider={Provider}",
+            username, LogRedaction.RedactRoles(assertion.Roles, verbose), providerId);
 
         var sessionToken = _stateManager.StoreAuthorizedSession(new AuthorizedSession
         {
@@ -208,10 +214,13 @@ public class SamlController : ControllerBase
     private void SetCallbackSecurityHeaders()
     {
         // See OidcController.SetCallbackSecurityHeaders for the full rationale on 'unsafe-inline'.
+        // frame-ancestors 'none' + X-Frame-Options: DENY stop the callback page from being framed,
+        // which would otherwise expose the in-page session token to a clickjacking/embedding attacker.
         Response.Headers["Content-Security-Policy"] =
-            "default-src 'none'; script-src 'unsafe-inline'; connect-src 'self'; style-src 'unsafe-inline'";
+            "default-src 'none'; script-src 'unsafe-inline'; connect-src 'self'; style-src 'unsafe-inline'; frame-ancestors 'none'";
         Response.Headers["X-Content-Type-Options"] = "nosniff";
         Response.Headers["Referrer-Policy"] = "no-referrer";
+        Response.Headers["X-Frame-Options"] = "DENY";
     }
 
     /// <summary>Completes SAML authentication by exchanging the session token for a Jellyfin auth token.</summary>
@@ -240,6 +249,19 @@ public class SamlController : ControllerBase
                 session.Entitlements,
                 session.ProviderId).ConfigureAwait(false);
 
+            // Mint a real Jellyfin session so the callback page can store working credentials.
+            // Mirrors OidcController.Authenticate's AuthenticateDirect wiring exactly.
+            var authRequest = new AuthenticationRequest
+            {
+                App = request.App ?? "Jellyfin Web",
+                AppVersion = request.AppVersion ?? "0.0.0",
+                DeviceId = request.DeviceId ?? Guid.NewGuid().ToString(),
+                DeviceName = request.DeviceName ?? "SAML",
+                UserId = userId
+            };
+
+            var authResult = await _sessionManager.AuthenticateDirect(authRequest).ConfigureAwait(false);
+
             await _rbacService.LogActivityAsync(
                 $"SAML login: {session.Username}",
                 "SamlLoginSuccess",
@@ -247,8 +269,7 @@ public class SamlController : ControllerBase
                 $"Provider: {providerId}",
                 Microsoft.Extensions.Logging.LogLevel.Information).ConfigureAwait(false);
 
-            // Return minimal auth result for the JS to pick up
-            return Ok(new { UserId = userId });
+            return Ok(authResult);
         }
         catch (OidcUsernameCollisionException ex)
         {
@@ -277,6 +298,9 @@ public class SamlController : ControllerBase
     public ActionResult GetProviders()
     {
         var config = _configProvider.GetConfiguration();
+        var trustedProxies = ClientIpResolver.ParseCidrs(config.TrustedProxyCidrs, _logger);
+        var scheme = ClientIpResolver.ResolveScheme(HttpContext, config.TrustForwardedHeaders, trustedProxies);
+        var host = ClientIpResolver.ResolveHost(HttpContext, config.TrustForwardedHeaders, trustedProxies);
         var providers = config.SamlProviders
             .Where(p => p.Enabled)
             .Select(p => new
@@ -284,7 +308,7 @@ public class SamlController : ControllerBase
                 p.Id,
                 p.DisplayName,
                 p.ButtonColor,
-                StartUrl = $"{Request.Scheme}://{Request.Host}/sso/SAML/Start/{p.Id}"
+                StartUrl = $"{scheme}://{host}/sso/SAML/Start/{p.Id}"
             });
 
         return Ok(providers);
@@ -296,14 +320,27 @@ public class SamlController : ControllerBase
             .Find(p => string.Equals(p.Id, providerId, StringComparison.OrdinalIgnoreCase) && p.Enabled);
     }
 
-    private string BuildAcsUrl(string providerId) =>
-        $"{Request.Scheme}://{Request.Host}/sso/SAML/ACS/{providerId}";
+    // The ACS URL is reverse-proxy aware so the AuthnRequest (in /Start) and the
+    // Destination/Recipient validation (in /ACS) both compute the externally-visible URL the
+    // IdP actually sees. Both call sites go through here, so they stay in lockstep.
+    private string BuildAcsUrl(string providerId)
+    {
+        var cfg = _configProvider.GetConfiguration();
+        var trustedProxies = ClientIpResolver.ParseCidrs(cfg.TrustedProxyCidrs, _logger);
+        var scheme = ClientIpResolver.ResolveScheme(HttpContext, cfg.TrustForwardedHeaders, trustedProxies);
+        var host = ClientIpResolver.ResolveHost(HttpContext, cfg.TrustForwardedHeaders, trustedProxies);
+        return $"{scheme}://{host}/sso/SAML/ACS/{providerId}";
+    }
 
     private static string BuildCallbackHtml(string sessionToken, string providerId)
     {
-        // JSON-encode every value crossing into <script> — see OidcController.BuildCallbackHtml.
+        // Every value that crosses into the <script> body is JSON-encoded. JsonSerializer
+        // produces a valid JS string literal, so even a provider id with hostile characters
+        // cannot break out of the literal. Mirrors OidcController.BuildCallbackHtml.
         var encodedToken = JsonSerializer.Serialize(sessionToken);
         var encodedProvider = JsonSerializer.Serialize(providerId);
+        var appVersion = OidcPlugin.Instance?.Version?.ToString() ?? "0.0.0";
+        var encodedVersion = JsonSerializer.Serialize(appVersion);
         return $$"""
         <!DOCTYPE html>
         <html>
@@ -315,17 +352,48 @@ public class SamlController : ControllerBase
         (function() {
             const token = {{encodedToken}};
             const providerId = {{encodedProvider}};
+
             const deviceId = localStorage.getItem('_deviceId2') || crypto.randomUUID();
             localStorage.setItem('_deviceId2', deviceId);
 
             fetch('/sso/SAML/Auth/' + encodeURIComponent(providerId), {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ Token: token })
+                body: JSON.stringify({
+                    Token: token,
+                    DeviceId: deviceId,
+                    DeviceName: navigator.userAgent.substring(0, 50),
+                    App: 'Jellyfin Web',
+                    AppVersion: {{encodedVersion}}
+                })
             })
-            .then(function(r) { if (!r.ok) throw new Error('Auth failed: ' + r.status); return r.json(); })
-            .then(function(result) {
-                // SAML auth returns userId; use Jellyfin's standard login to get a full session
+            .then(function(r) {
+                if (r.status === 409) {
+                    return r.json().then(function(body) {
+                        throw new Error(body && body.message ? body.message : 'Account collision');
+                    });
+                }
+                if (!r.ok) throw new Error('Auth failed: ' + r.status);
+                return r.json();
+            })
+            .then(function(auth) {
+                var credentials = {
+                    Servers: [{
+                        ManualAddress: window.location.origin,
+                        AccessToken: auth.AccessToken,
+                        UserId: auth.User.Id,
+                        IsLocalUser: true
+                    }]
+                };
+                localStorage.setItem('jellyfin_credentials', JSON.stringify(credentials));
+
+                var user = {
+                    Id: auth.User.Id,
+                    ServerId: auth.ServerId,
+                    AccessToken: auth.AccessToken
+                };
+                localStorage.setItem('_jellyfin_user_' + auth.ServerId, JSON.stringify(user));
+
                 document.getElementById('status').textContent = 'Success! Redirecting...';
                 window.location.href = '/';
             })

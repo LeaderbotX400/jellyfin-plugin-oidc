@@ -12,6 +12,7 @@ using Jellyfin.Data;
 using Jellyfin.Database.Implementations.Enums;
 using Jellyfin.Plugin.OIDC.Api;
 using Jellyfin.Plugin.OIDC.Configuration;
+using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Mvc;
 using Xunit;
 
@@ -271,6 +272,99 @@ public sealed class SamlFlowTests : IClassFixture<MockIdpFixture>
         var saml2 = BuildAndSignResponse("alice", new[] { "user" }, requestId2, assertionId: "_assert-replay");
         var second = await fixture.SamlController.AssertionConsumerService(ProviderId, saml2, relayState2);
         Assert.IsType<BadRequestObjectResult>(second);
+    }
+
+    [Fact]
+    public async Task AuthFlow_ValidToken_ReturnsRealJellyfinAccessToken()
+    {
+        var fixture = new TestFixture(_idp);
+        AddSignedSamlProvider(fixture);
+
+        var (relayState, requestId) = InitiateSpFlow(fixture);
+        var samlResponse = BuildAndSignResponse(
+            nameId: "saml-session-user", roles: new[] { "user" }, requestId: requestId);
+        var acsResult = await fixture.SamlController.AssertionConsumerService(
+            ProviderId, samlResponse, relayState);
+        var token = ExtractSessionToken(Assert.IsType<ContentResult>(acsResult));
+
+        // POST the session token to /Auth with device fields, exactly like the callback page JS.
+        var authResult = await fixture.SamlController.Authenticate(
+            ProviderId,
+            new AuthenticateRequest
+            {
+                Token = token,
+                DeviceId = "saml-device",
+                DeviceName = "saml-test-agent",
+                App = "Jellyfin Web",
+                AppVersion = "1.2.3"
+            });
+
+        var ok = Assert.IsType<OkObjectResult>(authResult);
+        var jellyfinAuth = Assert.IsType<MediaBrowser.Controller.Authentication.AuthenticationResult>(ok.Value);
+        Assert.NotNull(jellyfinAuth.AccessToken);
+        Assert.NotEmpty(jellyfinAuth.AccessToken);
+        Assert.NotEqual(Guid.Empty, jellyfinAuth.User!.Id);
+    }
+
+    [Fact]
+    public void StartAndAcsUrl_HonorForwardedProtoAndHost_WhenProxyTrusted()
+    {
+        var fixture = new TestFixture(_idp);
+        var provider = AddSignedSamlProvider(fixture);
+
+        // Trust the immediate peer as a reverse proxy and let it dictate the external scheme/host.
+        fixture.ConfigProvider.Configuration.TrustForwardedHeaders = true;
+        fixture.ConfigProvider.Configuration.TrustedProxyCidrs = new List<string> { "10.0.0.0/8" };
+
+        var ctx = fixture.SamlController.ControllerContext.HttpContext;
+        ctx.Connection.RemoteIpAddress = System.Net.IPAddress.Parse("10.1.2.3");
+        ctx.Request.Headers["X-Forwarded-Proto"] = "https";
+        ctx.Request.Headers["X-Forwarded-Host"] = "sso.public.example";
+
+        // The AuthnRequest's ACS URL (in /Start) must reflect the forwarded values.
+        var startResult = fixture.SamlController.Start(ProviderId);
+        var redirect = Assert.IsType<RedirectResult>(startResult);
+        var samlRequestB64 = HttpUtility.ParseQueryString(new Uri(redirect.Url).Query)["SAMLRequest"]!;
+        var acsInRequest = ExtractAcsUrl(samlRequestB64);
+        Assert.Equal("https://sso.public.example/sso/SAML/ACS/" + ProviderId, acsInRequest);
+
+        // GetProviders' StartUrl must also reflect the forwarded values.
+        var providersResult = fixture.SamlController.GetProviders();
+        var ok = Assert.IsType<OkObjectResult>(providersResult);
+        var json = System.Text.Json.JsonSerializer.Serialize(ok.Value);
+        Assert.Contains(
+            "https://sso.public.example/sso/SAML/Start/" + provider.Id,
+            json);
+    }
+
+    [Fact]
+    public async Task AcsCallback_SetsFrameProtectionHeaders()
+    {
+        var fixture = new TestFixture(_idp);
+        AddSignedSamlProvider(fixture);
+
+        var (relayState, requestId) = InitiateSpFlow(fixture);
+        var samlResponse = BuildAndSignResponse(
+            nameId: "frame-user", roles: new[] { "user" }, requestId: requestId);
+        var acsResult = await fixture.SamlController.AssertionConsumerService(
+            ProviderId, samlResponse, relayState);
+        Assert.IsType<ContentResult>(acsResult);
+
+        var headers = fixture.SamlController.ControllerContext.HttpContext.Response.Headers;
+        Assert.Equal("DENY", headers["X-Frame-Options"].ToString());
+        Assert.Contains("frame-ancestors 'none'", headers["Content-Security-Policy"].ToString());
+    }
+
+    private static string ExtractAcsUrl(string deflatedBase64)
+    {
+        var compressed = Convert.FromBase64String(deflatedBase64);
+        using var inStream = new System.IO.MemoryStream(compressed);
+        using var deflate = new System.IO.Compression.DeflateStream(inStream, System.IO.Compression.CompressionMode.Decompress);
+        using var reader = new System.IO.StreamReader(deflate, Encoding.UTF8);
+        var xml = reader.ReadToEnd();
+        var doc = new XmlDocument();
+        doc.LoadXml(xml);
+        return doc.DocumentElement!.GetAttribute("AssertionConsumerServiceURL");
     }
 
     private static string ExtractSessionToken(ContentResult content) =>
