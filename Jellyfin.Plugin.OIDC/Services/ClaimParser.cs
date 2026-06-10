@@ -68,7 +68,7 @@ public static class ClaimParser
                     Base64UrlDecode(token.RawPayload));
                 return WalkJsonPath(doc.RootElement, pathParts);
             }
-            catch
+            catch (Exception e) when (e is JsonException or FormatException or ArgumentException)
             {
                 return Array.Empty<string>();
             }
@@ -81,7 +81,7 @@ public static class ClaimParser
             var remaining = pathParts.Skip(1).ToArray();
             return WalkJsonPath(doc.RootElement, remaining);
         }
-        catch
+        catch (JsonException)
         {
             return Array.Empty<string>();
         }
@@ -131,7 +131,7 @@ public static class ClaimParser
                     .ToArray();
             }
         }
-        catch
+        catch (JsonException)
         {
             // Not valid JSON
         }

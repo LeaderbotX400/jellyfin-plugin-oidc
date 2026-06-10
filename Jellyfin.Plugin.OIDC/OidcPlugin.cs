@@ -15,11 +15,14 @@ public class OidcPlugin : BasePlugin<PluginConfiguration>, IHasWebPages
 {
     private readonly ILogger<OidcPlugin> _log;
 
-    public OidcPlugin(IApplicationPaths applicationPaths, IXmlSerializer xmlSerializer)
+    public OidcPlugin(
+        IApplicationPaths applicationPaths,
+        IXmlSerializer xmlSerializer,
+        ILogger<OidcPlugin> logger)
         : base(applicationPaths, xmlSerializer)
     {
         Instance = this;
-        _log = LoggerFactory.Create(b => b.AddConsole()).CreateLogger<OidcPlugin>();
+        _log = logger;
 
         // Run the one-time legacy-deny migration on initial load only. The UI does not round-trip
         // the plugin-level sentinel, but System.Text.Json deserialization preserves it from the
