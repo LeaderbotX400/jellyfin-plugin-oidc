@@ -35,7 +35,7 @@ public class OidcUserRecord
 }
 
 /// <summary>Persists per-user OIDC claim snapshots and account links for re-sync and back-channel logout.</summary>
-public class OidcUserStore
+public class OidcUserStore : IDisposable
 {
     private sealed class StoreData
     {
@@ -290,7 +290,7 @@ public class OidcUserStore
     {
         _logger?.LogError(ex, "OidcUserStore: corrupt store file detected at '{Path}' — quarantining", path);
 
-        var timestamp = DateTimeOffset.UtcNow.ToString("yyyyMMddTHHmmssZ");
+        var timestamp = DateTimeOffset.UtcNow.ToString("yyyyMMddTHHmmssZ", System.Globalization.CultureInfo.InvariantCulture);
         var quarantinePath = path + ".corrupt-" + timestamp;
 
         try
@@ -389,4 +389,11 @@ public class OidcUserStore
 
     private static string LinkKey(string providerId, string sub) =>
         providerId.ToLowerInvariant() + ":" + sub;
+
+    /// <inheritdoc/>
+    public void Dispose()
+    {
+        _writeLock.Dispose();
+        GC.SuppressFinalize(this);
+    }
 }

@@ -461,7 +461,7 @@ public static class SamlResponse
             signedRoot = doc.DocumentElement ??
                 throw new InvalidOperationException("SAML response has no document element.");
         }
-        else if (uri.StartsWith("#", StringComparison.Ordinal))
+        else if (uri.StartsWith('#'))
         {
             var id = uri.Substring(1);
             signedRoot = FindElementById(doc, id) ??

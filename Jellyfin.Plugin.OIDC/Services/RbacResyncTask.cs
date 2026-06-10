@@ -12,7 +12,7 @@ namespace Jellyfin.Plugin.OIDC.Services;
 public class RbacResyncTask : IScheduledTask
 {
     // 0 = idle, 1 = running. Use Interlocked to guard against concurrent manual + interval triggers.
-    private static int _runState = 0;
+    private static int _runState;
 
     private readonly IServiceScopeFactory _scopeFactory;
     private readonly OidcUserStore _userStore;
