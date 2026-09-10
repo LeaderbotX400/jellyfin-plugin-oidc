@@ -124,6 +124,14 @@ public sealed class RequireSsoMiddleware
             return false;
         }
 
+        // This runs on every request that reaches the server, media streaming included, so reject
+        // the overwhelming majority before allocating a segment array. Both routes we care about
+        // end in "Authenticate" or "AuthenticateByName", so no match here means no match at all.
+        if (!path.Contains("uthenticate", StringComparison.OrdinalIgnoreCase))
+        {
+            return false;
+        }
+
         var segments = path.Split('/', StringSplitOptions.RemoveEmptyEntries);
 
         // Tolerate a base-URL prefix by matching the tail rather than the whole path.
