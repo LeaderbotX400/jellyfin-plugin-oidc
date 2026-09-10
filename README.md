@@ -15,6 +15,7 @@ Authenticate users via any OIDC-compatible identity provider (Authentik, Keycloa
 - **Default role fallback** - assign a baseline role to users with no matching IdP roles
 - **Admin UI** - full configuration from the Jellyfin dashboard (Providers, Role Mappings, General settings)
 - **Auto-injected login buttons** - no manual branding HTML required
+- **Profile pictures** - sync the Jellyfin avatar from the OIDC `picture` claim, behind a full SSRF guard
 
 ## Compatibility
 
@@ -176,6 +177,52 @@ The **Role Claim Path** supports:
 | `roles`                | `{"roles": ["admin"]}`                           | Custom/Azure |
 
 The plugin checks both the ID token and access token for role claims.
+
+## Profile Pictures
+
+The Jellyfin avatar is synced from the OIDC `picture` claim on login. This is **on by
+default**; turn it off per provider with the *Sync profile picture* checkbox.
+
+- The claim name is configurable (**Picture Claim**, default `picture`). If the ID token
+  does not carry it, the plugin falls back to the provider's `userinfo` endpoint —
+  Authentik, for one, only exposes `picture` there.
+- The image is re-downloaded only when the claim URL changes, so repeat logins cost no
+  network request. If the URL changes but the bytes are identical, the file is not rewritten.
+- Sync **overwrites** an avatar set in Jellyfin. If users should manage their own, turn it off.
+- A failed fetch never fails the login. The user keeps their previous avatar and the reason
+  is logged at Warning.
+
+### Which hosts the server will fetch from
+
+The picture claim is a URL supplied by the IdP that **your server** then requests, and on
+IdPs where users edit their own profile (Keycloak, Authentik) it is effectively user-supplied.
+It is therefore treated as untrusted input:
+
+| Guard | Behaviour |
+|-------|-----------|
+| Scheme | HTTPS only (plain HTTP to localhost needs *Allow insecure authority*) |
+| Origin | The provider's Authority origin, plus any host in **Avatar Allowed Hosts** |
+| Address | Rejected if the host resolves to any loopback, private, link-local, CGNAT or ULA address — this is what blocks `169.254.169.254` and friends |
+| DNS rebinding | The connection is pinned to the address that was validated, so it cannot be re-resolved to an internal one |
+| Redirects | Not followed — a redirect target has been through none of the above |
+| Size | 5 MiB, enforced while reading rather than trusting `Content-Length` |
+| Type | `image/jpeg`, `image/png`, `image/gif`, `image/webp`, and the payload's magic bytes must agree. `image/svg+xml` is refused outright — SVG can carry script |
+
+**Avatar Allowed Hosts** is only needed when the IdP serves avatars off a different host
+than its issuer. Common cases:
+
+| IdP | Add to Avatar Allowed Hosts |
+|-----|------------------------------|
+| Authentik, Keycloak (self-hosted avatars) | *nothing — same origin as the Authority* |
+| Google | `lh3.googleusercontent.com` |
+| Microsoft Entra ID | `graph.microsoft.com` |
+| Gravatar-backed IdPs | `www.gravatar.com` |
+
+Entries are bare hostnames — no scheme, port, path or wildcard. A malformed entry is
+rejected when you save, rather than silently never matching.
+
+Images are written to `<user configuration directory>/<username>/profile.<ext>`, the same
+location Jellyfin's own avatar upload uses.
 
 ## Identity Provider Guides
 

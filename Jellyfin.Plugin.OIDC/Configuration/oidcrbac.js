@@ -161,6 +161,7 @@ function renderProviders(view) {
                     fld('Username Claim', 'text', 'prov_userclaim_' + idx, p.UsernameClaim || 'preferred_username') +
                     fld('Display Name Claim', 'text', 'prov_displayclaim_' + idx, p.DisplayNameClaim || 'name') +
                     fld('Email Claim', 'text', 'prov_emailclaim_' + idx, p.EmailClaim || 'email', 'Used by Auto-link by verified email') +
+                    fld('Picture Claim', 'text', 'prov_pictureclaim_' + idx, p.PictureClaim || 'picture', 'Avatar URL; read from userinfo if absent from the ID token') +
                     fld('Entitlement Claim', 'text', 'prov_entclaim_' + idx, p.EntitlementClaim || 'entitlements', 'Authentik-style entitlements') +
                     fld('Entitlement Prefix', 'text', 'prov_entprefix_' + idx, p.EntitlementPrefix || 'jellyfin:') +
                 '</div>'
@@ -178,6 +179,9 @@ function renderProviders(view) {
                 chkDesc('prov_rolesfromat_' + idx, 'Read roles from access token (validated) when ID token has none',
                     p.RolesFromAccessToken,
                     'When enabled and the ID token contains no roles, roles are extracted from the access token after full signature/issuer validation. Leave off unless your IdP places roles only in the access token.') +
+                chkDesc('prov_syncprofileimage_' + idx, 'Sync profile picture from the picture claim',
+                    p.SyncProfileImage !== false,
+                    'Overwrites the Jellyfin avatar on login. Only re-downloaded when the claim URL changes, and a failed fetch never blocks the login.') +
                 chk('prov_autolinkemail_' + idx, 'Auto-link to local user by verified email (DANGEROUS — see docs)', p.AutoLinkByVerifiedEmail) +
                 chk('prov_enforcessolink_' + idx, 'Enforce SSO-only on auto-link (disables local password)', p.EnforceSsoOnLink)
             ) +
@@ -191,6 +195,9 @@ function renderProviders(view) {
                 fldDesc('Required ACR Values', 'text', 'prov_acr_' + idx,
                     (p.RequiredAcrValues || []).join(','),
                     'Comma-separated Authentication Context Class References (e.g. urn:mace:incommon:iap:silver). Leave empty to allow any ACR.', true) +
+                fldDesc('Avatar Allowed Hosts', 'text', 'prov_picturehosts_' + idx,
+                    (p.PictureAllowedHosts || []).join(','),
+                    'Comma-separated bare hostnames the avatar fetcher may contact in addition to the Authority origin — e.g. lh3.googleusercontent.com for Google, graph.microsoft.com for Entra ID. Leave empty to allow the Authority origin only.', true) +
                 chk('prov_allowinsecure_' + idx, 'Allow insecure authority (dev/test only)', p.AllowInsecureAuthority) +
                 '<div class="fieldDescription"><strong>DANGER:</strong> HTTPS is required for Authority / JWKS / token endpoints. The "Allow insecure" toggle relaxes this for localhost only and must never be enabled in production.</div>'
             ) +
@@ -475,6 +482,8 @@ function collectProviders(view) {
             UsernameClaim: gval(view, 'prov_userclaim_' + idx),
             DisplayNameClaim: gval(view, 'prov_displayclaim_' + idx),
             EmailClaim: gval(view, 'prov_emailclaim_' + idx) || 'email',
+            PictureClaim: gval(view, 'prov_pictureclaim_' + idx) || 'picture',
+            SyncProfileImage: gchk(view, 'prov_syncprofileimage_' + idx),
             ButtonColor: gval(view, 'prov_color_' + idx),
             AdditionalParameters: gval(view, 'prov_params_' + idx),
             EntitlementClaim: gval(view, 'prov_entclaim_' + idx) || 'entitlements',
@@ -493,6 +502,8 @@ function collectProviders(view) {
             RequiredAmrValues: gval(view, 'prov_amr_' + idx)
                 .split(',').map(function (s) { return s.trim(); }).filter(function (s) { return s.length > 0; }),
             RequiredAcrValues: gval(view, 'prov_acr_' + idx)
+                .split(',').map(function (s) { return s.trim(); }).filter(function (s) { return s.length > 0; }),
+            PictureAllowedHosts: gval(view, 'prov_picturehosts_' + idx)
                 .split(',').map(function (s) { return s.trim(); }).filter(function (s) { return s.length > 0; })
         });
     });
@@ -622,7 +633,9 @@ export default function (view) {
             ProviderId: '', DisplayName: 'New Provider', Authority: '',
             ClientId: '', ClientSecret: '', Scopes: 'openid profile email',
             RoleClaim: 'groups', UsernameClaim: 'preferred_username',
-            DisplayNameClaim: 'name', EmailClaim: 'email', Enabled: true, ButtonColor: '#4285F4',
+            DisplayNameClaim: 'name', EmailClaim: 'email', PictureClaim: 'picture',
+            SyncProfileImage: true, PictureAllowedHosts: [],
+            Enabled: true, ButtonColor: '#4285F4',
             ButtonIcon: '', AdditionalParameters: '',
             EntitlementClaim: 'entitlements', EntitlementPrefix: 'jellyfin:',
             EnableEntitlements: true, RequireEmailVerified: false,

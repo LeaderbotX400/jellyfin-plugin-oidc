@@ -51,6 +51,48 @@ public static class ProviderConfigValidator
         // An empty list is rejected: SigningKeyResolver refuses to validate tokens when no
         // algorithms are configured, so an empty list would block all logins silently.
         ValidateSigningAlgorithms(provider);
+
+        ValidatePictureAllowedHosts(provider);
+    }
+
+    /// <summary>
+    /// Validates <see cref="OidcProviderConfig.PictureAllowedHosts"/>. Entries must be bare
+    /// hostnames — no scheme, port, path, or wildcard. This list widens what the server is
+    /// willing to fetch, so a malformed entry must be a save-time error rather than something
+    /// that silently never matches (an admin who typed "https://cdn.example.com/" and saw no
+    /// error would reasonably assume avatars were enabled when they are not).
+    /// </summary>
+    private static void ValidatePictureAllowedHosts(OidcProviderConfig provider)
+    {
+        foreach (var entry in provider.PictureAllowedHosts)
+        {
+            var host = entry?.Trim();
+
+            if (string.IsNullOrEmpty(host))
+            {
+                throw new InvalidOperationException(
+                    $"Provider '{provider.ProviderId}' has an empty entry in PictureAllowedHosts. " +
+                    "Remove the blank row, or enter a bare hostname such as lh3.googleusercontent.com.");
+            }
+
+            if (host.Contains("://", StringComparison.Ordinal)
+                || host.Contains('/', StringComparison.Ordinal)
+                || host.Contains(':', StringComparison.Ordinal)
+                || host.Contains('*', StringComparison.Ordinal)
+                || host.Contains(' ', StringComparison.Ordinal))
+            {
+                throw new InvalidOperationException(
+                    $"Provider '{provider.ProviderId}' PictureAllowedHosts entry '{host}' is not a bare hostname. " +
+                    "Enter only the host — no scheme, port, path or wildcard (e.g. lh3.googleusercontent.com).");
+            }
+
+            if (!Uri.CheckHostName(host).Equals(UriHostNameType.Dns)
+                && !Uri.CheckHostName(host).Equals(UriHostNameType.IPv4))
+            {
+                throw new InvalidOperationException(
+                    $"Provider '{provider.ProviderId}' PictureAllowedHosts entry '{host}' is not a valid hostname.");
+            }
+        }
     }
 
     /// <summary>

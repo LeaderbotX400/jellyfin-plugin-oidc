@@ -5,9 +5,9 @@
   "overview": "OpenID Connect SSO with granular role-to-library mapping, multi-provider support, and a full admin configuration UI.",
   "owner": "LeaderbotX400",
   "category": "Authentication",
-  "version": "0.2.0.0",
+  "version": "0.2.1.0",
   "targetAbi": "12.0.0.0",
-  "changelog": "BREAKING: requires Jellyfin 12.0 or newer. Retargeted to .NET 10 and Jellyfin.Controller 12.0.0; removed IAuthenticationProvider.HasPassword, dropped from the interface in 12.0. Jellyfin 10.10/10.11 servers must stay on 0.1.11.x. No functional changes to the OIDC/SAML login, RBAC, or back-channel logout flows.",
+  "changelog": "Sync the Jellyfin profile picture from the OIDC picture claim (on by default, per-provider opt-out), with an SSRF-guarded fetch: HTTPS only, Authority-origin plus admin allowlist, private/link-local address blocking, DNS-rebinding pinning, no redirects, a 5 MiB read-time cap, and magic-byte verification. Also fixes the admin config round-trip silently resetting EmailClaim, AutoLinkByVerifiedEmail, EnforceSsoOnLink, AllowInsecureAuthority and AllowedSigningAlgorithms.",
   "timestamp": "2026-09-09T00:00:00Z",
   "status": "Active"
 }

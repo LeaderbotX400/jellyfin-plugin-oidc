@@ -32,6 +32,18 @@ public class OidcUserRecord
     /// the mapping anyway so we have parity if Jellyfin gains a per-session revoke API later.
     /// </summary>
     public Dictionary<string, string> Sids { get; set; } = new();
+
+    /// <summary>
+    /// The <c>picture</c>-claim URL the currently-stored profile image was fetched from, and the
+    /// SHA-256 of the bytes that were written. Together these let a login skip the avatar fetch
+    /// entirely when nothing has changed — most IdPs version the avatar URL, so an unchanged URL
+    /// is a reliable "unchanged image" signal, and the hash catches the case where the URL moved
+    /// but the image did not. Written by <see cref="OidcUserStore.RecordProfileImageAsync"/>.
+    /// </summary>
+    public string ProfileImageSourceUrl { get; set; } = string.Empty;
+
+    /// <summary>SHA-256 (hex) of the profile image bytes last written for this user.</summary>
+    public string ProfileImageHash { get; set; } = string.Empty;
 }
 
 /// <summary>Persists per-user OIDC claim snapshots and account links for re-sync and back-channel logout.</summary>
@@ -96,7 +108,48 @@ public class OidcUserStore : IDisposable
         await EnsureLoadedAsync().ConfigureAwait(false);
         ThrowIfUnrecoverable();
         record.LastSyncedAt = DateTimeOffset.UtcNow;
+
+        // Upsert replaces the whole record, but callers build it from the claims of the login in
+        // hand and know nothing about the side-channel fields other code writes. Carry those
+        // forward when the incoming record leaves them at their defaults, so a login does not
+        // silently drop the back-channel-logout sid map or force a needless avatar re-download.
+        if (_records.TryGetValue(record.UserId, out var existing))
+        {
+            if (record.Sids.Count == 0 && existing.Sids.Count > 0)
+            {
+                record.Sids = existing.Sids;
+            }
+
+            if (string.IsNullOrEmpty(record.ProfileImageSourceUrl))
+            {
+                record.ProfileImageSourceUrl = existing.ProfileImageSourceUrl;
+                record.ProfileImageHash = existing.ProfileImageHash;
+            }
+        }
+
         _records[record.UserId] = record;
+        await PersistAsync().ConfigureAwait(false);
+    }
+
+    /// <summary>Returns the record for a Jellyfin user, or null if the user has never logged in via OIDC.</summary>
+    public async Task<OidcUserRecord?> GetByUserIdAsync(Guid userId)
+    {
+        await EnsureLoadedAsync().ConfigureAwait(false);
+        ThrowIfUnrecoverable();
+        return _records.TryGetValue(userId, out var record) ? record : null;
+    }
+
+    /// <summary>
+    /// Records which avatar URL the user's current profile image came from, and the hash of the
+    /// bytes written. Mutates in place rather than going through <see cref="UpsertAsync"/> because
+    /// the caller holds no claim snapshot — mirrors <see cref="RecordSidAsync"/>.
+    /// </summary>
+    public async Task RecordProfileImageAsync(Guid userId, string sourceUrl, string hash)
+    {
+        await EnsureLoadedAsync().ConfigureAwait(false);
+        if (!_records.TryGetValue(userId, out var record)) return;
+        record.ProfileImageSourceUrl = sourceUrl ?? string.Empty;
+        record.ProfileImageHash = hash ?? string.Empty;
         await PersistAsync().ConfigureAwait(false);
     }
 
