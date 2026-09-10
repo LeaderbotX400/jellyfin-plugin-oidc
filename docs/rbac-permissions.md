@@ -91,33 +91,36 @@ Tokens are case-insensitive; values after the second colon are case-preserved
 
 ### Boolean tokens
 
-| Token                          | Sets                                                          |
-|--------------------------------|---------------------------------------------------------------|
-| `jellyfin:admin`               | `IsAdministrator`                                             |
-| `jellyfin:disabled`            | `IsDisabled` (user cannot log in)                             |
-| `jellyfin:hidden`              | `IsHidden`                                                    |
-| `jellyfin:playback`            | `EnableMediaPlayback`                                         |
-| `jellyfin:remote`              | `EnableRemoteAccess`                                          |
-| `jellyfin:transcoding`         | Audio + video playback transcoding                            |
-| `jellyfin:transcoding:sync`    | `EnableSyncTranscoding`                                       |
-| `jellyfin:transcoding:force-remote` | `ForceRemoteSourceTranscoding`                           |
-| `jellyfin:remux`               | `EnablePlaybackRemuxing`                                      |
-| `jellyfin:conversion`          | `EnableMediaConversion`                                       |
-| `jellyfin:livetv`              | `EnableLiveTvAccess`                                          |
-| `jellyfin:livetv:manage`       | `EnableLiveTvAccess` **and** `EnableLiveTvManagement`         |
-| `jellyfin:content:delete`      | `EnableContentDeletion`                                       |
-| `jellyfin:collection:manage`   | `EnableCollectionManagement`                                  |
-| `jellyfin:subtitle:manage`     | `EnableSubtitleManagement`                                    |
-| `jellyfin:lyric:manage`        | `EnableLyricManagement`                                       |
-| `jellyfin:download`            | `EnableContentDownloading`                                    |
-| `jellyfin:syncplay`            | `SyncPlayAccess.JoinGroups`                                   |
-| `jellyfin:syncplay:host`       | `SyncPlayAccess.CreateAndJoinGroups`                          |
-| `jellyfin:library:all`         | `EnableAllFolders`                                            |
-| `jellyfin:channels:all`        | `EnableAllChannels`                                           |
-| `jellyfin:devices:all`         | `EnableAllDevices`                                            |
-| `jellyfin:devices:shared-control` | `EnableSharedDeviceControl`                                |
-| `jellyfin:remote-control`      | `EnableRemoteControlOfOtherUsers`                             |
-| `jellyfin:public-sharing`      | `EnablePublicSharing`                                         |
+Tokens marked **entitlement-only** have no equivalent field on `RoleMapping` —
+they can only be granted via an IdP claim, not from the admin UI.
+
+| Token                          | Sets                                                          | Notes              |
+|--------------------------------|---------------------------------------------------------------|--------------------|
+| `jellyfin:admin`               | `IsAdministrator`                                             |                    |
+| `jellyfin:disabled`            | `IsDisabled` (user cannot log in)                             | entitlement-only   |
+| `jellyfin:hidden`              | `IsHidden`                                                    |                    |
+| `jellyfin:playback`            | `EnableMediaPlayback`                                         |                    |
+| `jellyfin:remote`              | `EnableRemoteAccess`                                          |                    |
+| `jellyfin:transcoding`         | Audio + video playback transcoding                            |                    |
+| `jellyfin:transcoding:sync`    | `EnableSyncTranscoding`                                       | entitlement-only   |
+| `jellyfin:transcoding:force-remote` | `ForceRemoteSourceTranscoding`                           | entitlement-only   |
+| `jellyfin:remux`               | `EnablePlaybackRemuxing`                                      |                    |
+| `jellyfin:conversion`          | `EnableMediaConversion`                                       | entitlement-only   |
+| `jellyfin:livetv`              | `EnableLiveTvAccess`                                          |                    |
+| `jellyfin:livetv:manage`       | `EnableLiveTvAccess` **and** `EnableLiveTvManagement`         |                    |
+| `jellyfin:content:delete`      | `EnableContentDeletion`                                       |                    |
+| `jellyfin:collection:manage`   | `EnableCollectionManagement`                                  |                    |
+| `jellyfin:subtitle:manage`     | `EnableSubtitleManagement`                                    |                    |
+| `jellyfin:lyric:manage`        | `EnableLyricManagement`                                       | entitlement-only   |
+| `jellyfin:download`            | `EnableContentDownloading`                                    |                    |
+| `jellyfin:syncplay`            | `SyncPlayAccess.JoinGroups`                                   |                    |
+| `jellyfin:syncplay:host`       | `SyncPlayAccess.CreateAndJoinGroups`                          |                    |
+| `jellyfin:library:all`         | `EnableAllFolders`                                            |                    |
+| `jellyfin:channels:all`        | `EnableAllChannels`                                           | entitlement-only   |
+| `jellyfin:devices:all`         | `EnableAllDevices`                                            | entitlement-only   |
+| `jellyfin:devices:shared-control` | `EnableSharedDeviceControl`                                |                    |
+| `jellyfin:remote-control`      | `EnableRemoteControlOfOtherUsers`                             |                    |
+| `jellyfin:public-sharing`      | `EnablePublicSharing`                                         | entitlement-only   |
 
 ### Library tokens
 
@@ -134,13 +137,29 @@ When `library:all` is present, individual `library:<NAME>` tokens are ignored
 All numeric tokens support `unlimited` / `none` / `max` (where it makes sense) as
 sentinels. When multiple values are emitted, the **most permissive** wins.
 
-| Token                                  | Sets                                | Sentinel behavior                                             |
-|----------------------------------------|-------------------------------------|---------------------------------------------------------------|
-| `jellyfin:rating:<N>`                  | `MaxParentalRatingScore`            | `rating:unlimited` clears the cap (highest priority).         |
-| `jellyfin:rating:sub:<N>`              | `MaxParentalRatingSubScore`         | `rating:sub:unlimited` clears the sub-cap.                    |
-| `jellyfin:bitrate:<kbps>`              | `RemoteClientBitrateLimit`          | `bitrate:unlimited` clears the cap; otherwise highest wins.   |
-| `jellyfin:sessions:<N>`                | `MaxActiveSessions`                 | `sessions:unlimited` → 0 (Jellyfin convention for unlimited). |
-| `jellyfin:login-attempts:<N>`          | `LoginAttemptsBeforeLockout`        | `login-attempts:unlimited` clears the cap.                    |
+| Token                                  | Sets                                | Source           | Sentinel behavior                                             |
+|----------------------------------------|-------------------------------------|------------------|---------------------------------------------------------------|
+| `jellyfin:rating:<N>`                  | `MaxParentalRatingScore`            | mapping + ent.   | `rating:unlimited` clears the cap (highest priority).         |
+| `jellyfin:rating:sub:<N>`              | `MaxParentalRatingSubScore`         | entitlement-only | `rating:sub:unlimited` clears the sub-cap.                    |
+| `jellyfin:bitrate:<kbps>`              | `RemoteClientBitrateLimit`          | entitlement-only | `bitrate:unlimited` clears the cap; otherwise highest wins.   |
+| `jellyfin:sessions:<N>`                | `MaxActiveSessions`                 | mapping + ent.   | `sessions:unlimited` → 0 (Jellyfin convention for unlimited). |
+| `jellyfin:login-attempts:<N>`          | `LoginAttemptsBeforeLockout`        | entitlement-only | `login-attempts:unlimited` clears the cap.                    |
+
+#### "No opinion" handling for numeric fields
+
+In **`EntitlementsAuthoritative`** mode, when *nothing* (mapping or entitlement)
+opines on a numeric field, behavior is **asymmetric**:
+
+- **`MaxParentalRatingScore`** is **cleared to null** (user becomes
+  unrestricted). This is deliberate — the assumption is the IdP/admin owns
+  parental ratings, so the absence of a cap means "no cap", not "preserve
+  whatever was there".
+- **`MaxActiveSessions`, `RemoteClientBitrateLimit`,
+  `LoginAttemptsBeforeLockout`, `MaxParentalRatingSubScore`** are **left
+  untouched** (existing user value preserved).
+
+In **`RespectExistingWhenUnspecified`** mode (and only when no entitlements
+were emitted), all numeric fields are left untouched when no opinion exists.
 
 ---
 
