@@ -16,6 +16,25 @@ Authenticate users via any OIDC-compatible identity provider (Authentik, Keycloa
 - **Admin UI** - full configuration from the Jellyfin dashboard (Providers, Role Mappings, General settings)
 - **Auto-injected login buttons** - no manual branding HTML required
 
+## Compatibility
+
+| Jellyfin server | Plugin version | Target framework |
+|-----------------|----------------|------------------|
+| 12.0 and newer  | 0.2.x          | net10.0          |
+| 10.10 / 10.11   | 0.1.11.x       | net9.0           |
+
+Jellyfin 12 retargeted the server to .NET 10 and changed `IUserManager`, so a
+single build cannot serve both server lines. The 0.2.x artifact declares
+`targetAbi 12.0.0.0`, which stops Jellyfin's installer from offering it to a 10.x
+server; 10.x installs keep receiving 0.1.11.x from the same manifest.
+
+**Upgrading a server to Jellyfin 12:** per Jellyfin's own 12.0 release guidance,
+remove non-built-in plugins before migrating and reinstall them afterwards. Also
+check for Jellyfin usernames that differ only by case *before* upgrading — 12.0
+stores usernames in a normalized, uniquely-indexed column and such a pair will
+block the migration. This plugin creates and matches users by username, so
+auto-provisioned accounts are in scope for that check.
+
 ## Installation
 
 ### Quick install — add this repository to Jellyfin
@@ -192,7 +211,7 @@ See [examples/authentik/SETUP.md](examples/authentik/SETUP.md) for a complete st
 
 ### Requirements
 
-- .NET 9.0 SDK **or** Docker
+- .NET 10.0 SDK **or** Docker
 
 ### Build
 

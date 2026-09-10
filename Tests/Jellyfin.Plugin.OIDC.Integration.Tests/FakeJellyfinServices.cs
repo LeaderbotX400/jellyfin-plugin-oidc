@@ -53,11 +53,13 @@ public static class FakeJellyfinFactory
         mock.Setup(m => m.UpdateUserAsync(It.IsAny<User>()))
             .Returns<User>(u => { store.ById[u.Id] = u; return Task.CompletedTask; });
 
-        mock.Setup(m => m.ChangePassword(It.IsAny<User>(), It.IsAny<string>()))
+        mock.Setup(m => m.ChangePassword(It.IsAny<Guid>(), It.IsAny<string>()))
             .Returns(Task.CompletedTask);
 
-        // Users property — needed by last-admin lockout check in RbacService
-        mock.Setup(m => m.Users)
+        // GetUsers() — needed by last-admin lockout check in RbacService.
+        // Jellyfin 12.0 replaced the IUserManager.Users property with this method;
+        // production code goes through JellyfinCompat.EnumerateUsers, which tries both.
+        mock.Setup(m => m.GetUsers())
             .Returns(() => store.ById.Values.AsQueryable());
 
         return mock;

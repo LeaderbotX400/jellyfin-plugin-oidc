@@ -5,14 +5,9 @@
   "overview": "OpenID Connect SSO with granular role-to-library mapping, multi-provider support, and a full admin configuration UI.",
   "owner": "LeaderbotX400",
   "category": "Authentication",
-  "versions": [
-    {
-      "version": "0.1.11.0",
-      "changelog": "Admin UI refresh with native Jellyfin form controls; fix Explicit Deny checkbox text clipping; tolerate IUserManager.Users return-type drift; register OidcAuthProvider and fix the ChangePassword API-drift login crash.",
-      "targetAbi": "10.11.0.0",
-      "sourceUrl": "",
-      "timestamp": "2026-05-25T15:42:11Z"
-    }
-  ],
+  "version": "0.2.0.0",
+  "targetAbi": "12.0.0.0",
+  "changelog": "BREAKING: requires Jellyfin 12.0 or newer. Retargeted to .NET 10 and Jellyfin.Controller 12.0.0; removed IAuthenticationProvider.HasPassword, dropped from the interface in 12.0. Jellyfin 10.10/10.11 servers must stay on 0.1.11.x. No functional changes to the OIDC/SAML login, RBAC, or back-channel logout flows.",
+  "timestamp": "2026-09-09T00:00:00Z",
   "status": "Active"
 }

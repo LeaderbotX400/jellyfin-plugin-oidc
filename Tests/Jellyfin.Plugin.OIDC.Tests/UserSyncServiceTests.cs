@@ -51,7 +51,7 @@ public sealed class UserSyncServiceTests : IDisposable
             .Returns<string>(name => Task.FromResult(_userStore.CreateUser(name)));
         userManagerMock.Setup(m => m.UpdateUserAsync(It.IsAny<User>()))
             .Returns<User>(u => { _userStore.ById[u.Id] = u; return Task.CompletedTask; });
-        userManagerMock.Setup(m => m.ChangePassword(It.IsAny<User>(), It.IsAny<string>()))
+        userManagerMock.Setup(m => m.ChangePassword(It.IsAny<Guid>(), It.IsAny<string>()))
             .Returns(Task.CompletedTask);
         _users = userManagerMock.Object;
 

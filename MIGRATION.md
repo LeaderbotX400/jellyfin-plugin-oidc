@@ -1,5 +1,54 @@
 # Migration Notes
 
+## v0.2.0 — Jellyfin 12
+
+### What changed
+
+Plugin 0.2.x targets **Jellyfin 12.0 and newer only**. Jellyfin 12 retargeted the server to
+.NET 10, so the plugin is now built for `net10.0` against `Jellyfin.Controller` 12.0.0 and
+declares `targetAbi 12.0.0.0`. It will not load on Jellyfin 10.10 or 10.11.
+
+**If you run Jellyfin 10.10/10.11:** stay on plugin **0.1.11.x**. The published manifest still
+carries that entry, and Jellyfin's installer picks the newest version whose `targetAbi` your
+server satisfies — so a 10.x server will simply keep being offered 0.1.11.x and will not be
+upgraded to 0.2.x by accident.
+
+There are **no configuration changes and no functional changes** to the OIDC/SAML login flows,
+RBAC, entitlements, or back-channel logout. Your existing plugin configuration carries over
+untouched; no config migration runs.
+
+### Server API changes absorbed by this release
+
+For anyone maintaining a fork, these are the Jellyfin 12 breaking changes that actually touched
+this plugin:
+
+- `IAuthenticationProvider.HasPassword(User)` was removed from the interface. The implementation
+  in `Auth/OidcAuthProvider.cs` was deleted.
+- `IUserManager.Users` / `UsersIds` properties became `GetUsers()` / `GetUsersIds()` methods.
+  Production code was already routed through `Services/JellyfinCompat.EnumerateUsers`, which
+  tries the property and then the method, so no production change was needed — only the test
+  fakes.
+- `IUserManager.ChangePassword`, `ResetPassword` and `RenameUser` now take a `Guid` instead of a
+  `User`. This plugin never called them; only the test fakes needed updating.
+
+Everything else the plugin uses — `ISessionManager.AuthenticateDirect`, `IPluginServiceRegistrator`,
+`IHasWebPages`, `BasePlugin<>`, the `User` entity, `PermissionKind`, and the `Jellyfin.Data`
+permission extensions — is unchanged. Jellyfin 12's large EF Core/database rewrite does not affect
+this plugin, which never touches `DbContext` and keeps its own state in `oidc_users.json`.
+
+### Before upgrading the server to Jellyfin 12
+
+Two items from Jellyfin's own 12.0 release guidance that matter here:
+
+1. **Remove non-built-in plugins before migrating, and reinstall afterwards.** Remove OIDC-Auth
+   before the server upgrade, then install 0.2.x once the server is on 12.0. Plugin
+   configuration lives outside the plugin directory and survives this.
+2. **Fix usernames that differ only by case first.** Jellyfin 12 stores usernames in a
+   normalized, uniquely-indexed column, and a pair like `Alice` / `alice` will block the server
+   migration. This plugin auto-provisions users from the IdP `preferred_username` claim, so
+   auto-created accounts are squarely in scope — audit Dashboard → Users before upgrading.
+
+
 ## v0.1.3 — Deny-mapping default-permission fix
 
 ### What changed

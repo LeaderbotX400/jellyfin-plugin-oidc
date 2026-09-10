@@ -46,7 +46,7 @@ public class RbacServiceTests
         var userManagerMock = new Mock<IUserManager>();
         userManagerMock.Setup(m => m.GetUserById(subject.Id)).Returns(subject);
         userManagerMock.Setup(m => m.UpdateUserAsync(It.IsAny<User>())).Returns(Task.CompletedTask);
-        userManagerMock.Setup(m => m.Users).Returns(allUsers.AsQueryable());
+        userManagerMock.Setup(m => m.GetUsers()).Returns(allUsers.AsQueryable());
 
         var libraryManagerMock = new Mock<ILibraryManager>();
         libraryManagerMock.Setup(m => m.GetVirtualFolders())
@@ -190,7 +190,7 @@ public class RbacServiceTests
 
         Assert.False(GetPermission(alice, PermissionKind.IsAdministrator));
         // Admin count should NOT be queried when the user isn't being demoted from admin
-        userManagerMock.Verify(m => m.Users, Times.Never,
+        userManagerMock.Verify(m => m.GetUsers(), Times.Never,
             "Users should not be enumerated when the user is already non-admin");
     }
 
