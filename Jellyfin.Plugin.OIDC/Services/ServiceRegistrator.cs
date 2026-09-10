@@ -33,6 +33,8 @@ public class ServiceRegistrator : IPluginServiceRegistrator
         serviceCollection.AddHostedService(sp => sp.GetRequiredService<AuthorizationCodeCache>());
         serviceCollection.AddSingleton<CallbackRateLimiter>();
         serviceCollection.AddHostedService(sp => sp.GetRequiredService<CallbackRateLimiter>());
+        serviceCollection.AddSingleton<QuickConnectAttemptLimiter>();
+        serviceCollection.AddHostedService(sp => sp.GetRequiredService<QuickConnectAttemptLimiter>());
         serviceCollection.AddSingleton<OidcUserStore>(sp => new OidcUserStore(
             sp.GetRequiredService<ILogger<OidcUserStore>>(),
             sp.GetRequiredService<IActivityManager>()));

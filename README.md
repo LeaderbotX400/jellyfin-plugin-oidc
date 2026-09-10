@@ -17,6 +17,7 @@ Authenticate users via any OIDC-compatible identity provider (Authentik, Keycloa
 - **Auto-injected login buttons** - no manual branding HTML required
 - **Profile pictures** - sync the Jellyfin avatar from the OIDC `picture` claim, behind a full SSRF guard
 - **Optional SSO-only mode** - refuse Jellyfin's password login, with admin and LAN escape hatches
+- **Quick Connect bridge** - sign in Android / iOS / Android TV apps with SSO, no password
 
 ## Compatibility
 
@@ -119,6 +120,37 @@ settings and paste the tag from `GET /sso/OIDC/BrandingSnippet` into
 Injection is best-effort by design: if Jellyfin's web shell ever changes shape enough that the
 plugin cannot find an insertion point, it serves the page untouched and logs a warning telling you
 to use the manual snippet. It never breaks the web UI.
+
+## Signing in native apps (Quick Connect bridge)
+
+Android, iOS/Swiftfin and Android TV cannot render the SSO login button, so on an SSO-only
+server they would have no way in. The plugin bridges Jellyfin's own Quick Connect:
+
+1. On the TV or phone app, start Quick Connect. It shows a code.
+2. On any browser, open **`/sso/OIDC/QuickConnect`** (also linked from the login page as
+   *Sign in a TV or mobile app*).
+3. Sign in with SSO.
+4. Type the code from step 1 and press Authorize.
+5. The app finishes signing in on its own.
+
+Requires Quick Connect to be enabled in **Dashboard > General** — the page says so if it
+is not. There is no separate plugin setting; that server switch is the only gate.
+
+The browser you use in step 2 does **not** become a signed-in Jellyfin client. It is a
+helper for authorizing the television, so the access token is used once and never written
+to browser storage.
+
+### Why you type the code instead of clicking a link
+
+Quick Connect is a device-code flow, and the plugin never accepts the code from a URL.
+If it did, an attacker could start Quick Connect on *their* device and send you a link
+that made your SSO login authorize *their* device — the standard device-code phishing
+attack. Typing a code you can physically see on your own screen is what ties the approval
+to you. This is the same reason Jellyfin's own Quick Connect page works the way it does.
+
+Wrong codes are limited to 5 attempts per user per 5 minutes. A six-digit code lives for
+10 minutes, which is well within brute-force range for an already-signed-in user trying to
+capture someone else's pending request.
 
 ## Requiring SSO
 

@@ -4,6 +4,7 @@ using System.IdentityModel.Tokens.Jwt;
 using System.Linq;
 using System.Net.Http;
 using System.Security.Cryptography;
+using System.Globalization;
 using System.Text;
 using System.Text.Json;
 using System.Threading;
@@ -14,7 +15,10 @@ using Jellyfin.Plugin.OIDC;
 using Jellyfin.Plugin.OIDC.Configuration;
 using Jellyfin.Plugin.OIDC.Services;
 using MediaBrowser.Common.Api;
+using MediaBrowser.Common.Extensions;
+using MediaBrowser.Controller.Authentication;
 using MediaBrowser.Controller.Library;
+using MediaBrowser.Controller.QuickConnect;
 using MediaBrowser.Controller.Session;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Http;
@@ -43,6 +47,8 @@ public class OidcController : ControllerBase
     private readonly AuthorizationCodeCache _codeCache;
     private readonly CallbackRateLimiter _rateLimiter;
     private readonly ProfileImageService _profileImageService;
+    private readonly IQuickConnect _quickConnect;
+    private readonly QuickConnectAttemptLimiter _qcAttemptLimiter;
     private readonly ILogger<OidcController> _logger;
 
     public OidcController(
@@ -59,6 +65,8 @@ public class OidcController : ControllerBase
         AuthorizationCodeCache codeCache,
         CallbackRateLimiter rateLimiter,
         ProfileImageService profileImageService,
+        IQuickConnect quickConnect,
+        QuickConnectAttemptLimiter qcAttemptLimiter,
         ILogger<OidcController> logger)
     {
         _stateManager = stateManager;
@@ -74,11 +82,27 @@ public class OidcController : ControllerBase
         _codeCache = codeCache;
         _rateLimiter = rateLimiter;
         _profileImageService = profileImageService;
+        _quickConnect = quickConnect;
+        _qcAttemptLimiter = qcAttemptLimiter;
         _logger = logger;
     }
 
     [HttpGet("Start/{providerId}")]
-    public async Task<ActionResult> Start(string providerId)
+    public Task<ActionResult> Start(string providerId) => BeginAuthorizeAsync(providerId, quickConnect: false);
+
+    /// <summary>
+    /// Starts the OIDC login flow, redirecting to the IdP.
+    /// </summary>
+    /// <param name="providerId">The configured provider to authenticate against.</param>
+    /// <param name="quickConnect">
+    /// When true the callback renders the Quick Connect code-entry page instead of establishing a
+    /// web session. This flag is the ONLY thing the Quick Connect variant changes: it travels
+    /// inside the server-side <see cref="OidcState"/>, keyed by the opaque state parameter, so the
+    /// IdP leg — PKCE, nonce, the CSRF-binding cookie — is byte-for-byte the login flow and gains
+    /// no new attack surface. Note in particular that no return URL is carried, deliberately:
+    /// there is no open redirect to get wrong.
+    /// </param>
+    private async Task<ActionResult> BeginAuthorizeAsync(string providerId, bool quickConnect)
     {
         if (!ProviderIdValidation.IsValid(providerId))
         {
@@ -117,7 +141,8 @@ public class OidcController : ControllerBase
             Nonce = nonce,
             CodeVerifier = codeVerifier,
             RedirectUri = redirectUri,
-            CsrfBindingHash = csrfHash
+            CsrfBindingHash = csrfHash,
+            QuickConnect = quickConnect
         };
 
         var stateKey = _stateManager.StoreState(state);
@@ -482,6 +507,15 @@ public class OidcController : ControllerBase
 
         _rateLimiter.RecordSuccess(remoteIp);
         SetCallbackSecurityHeaders();
+
+        // Quick Connect bridge: instead of establishing a web session and bouncing to /web, hand
+        // the browser a page that exchanges the session token for a Jellyfin token and then asks
+        // for the code shown on the native device.
+        if (oidcState.QuickConnect)
+        {
+            return Content(BuildQuickConnectHtml(sessionToken, providerId), "text/html");
+        }
+
         return Content(BuildCallbackHtml(sessionToken, providerId), "text/html");
     }
 
@@ -753,6 +787,129 @@ public class OidcController : ControllerBase
         return Redirect(url);
     }
 
+    // ── Quick Connect bridge ────────────────────────────────────────────────
+    //
+    // Native clients (Android, iOS/Swiftfin, Android TV) cannot render the web login button, so
+    // on an SSO-only server they have no way in. Jellyfin's Quick Connect already handles the
+    // cross-device half; what was missing is a single short URL that both signs the user in with
+    // SSO and takes the code. That is all this is.
+    //
+    // SECURITY: the code is typed by the user AFTER authenticating, and is never accepted from
+    // the URL. Quick Connect is a device-code flow, so a link carrying the code is the textbook
+    // phishing vector — an attacker initiates on their own device and gets a victim's SSO login
+    // to approve it. Typing a code you can physically see on the device is the binding, and it
+    // is the same property Jellyfin's own Quick Connect page relies on.
+
+    /// <summary>Landing page for the bridge: pick a provider, then sign in. Deliberately anonymous.</summary>
+    [HttpGet("QuickConnect")]
+    public ActionResult QuickConnectLanding()
+    {
+        var providers = _configProvider.GetConfiguration().Providers.Where(p => p.Enabled).ToList();
+        SetCallbackSecurityHeaders();
+        return Content(BuildQuickConnectLandingHtml(providers, _quickConnect.IsEnabled), "text/html");
+    }
+
+    /// <summary>Same login flow as <see cref="Start"/>, but the callback ends at the code-entry page.</summary>
+    [HttpGet("QuickConnect/Start/{providerId}")]
+    public Task<ActionResult> QuickConnectStart(string providerId)
+        => BeginAuthorizeAsync(providerId, quickConnect: true);
+
+    /// <summary>
+    /// Authorizes a pending Quick Connect request for the calling user.
+    ///
+    /// <see cref="Microsoft.AspNetCore.Authorization.AuthorizeAttribute"/> is doing the real work:
+    /// identity comes from Jellyfin's own auth stack, exactly as it does for the server's built-in
+    /// <c>POST /QuickConnect/Authorize</c>. <see cref="IQuickConnect.AuthorizeRequest"/> takes an
+    /// explicit user id and performs no authorization of its own, so the caller is wholly
+    /// responsible for proving who it is acting for — which is why this must never be anonymous.
+    /// </summary>
+    [HttpPost("QuickConnect/Authorize")]
+    [Authorize]
+    public async Task<ActionResult> QuickConnectAuthorize([FromBody] QuickConnectAuthorizeRequest request)
+    {
+        var userId = GetCurrentUserId();
+        if (userId == null)
+        {
+            return Unauthorized("Could not determine current user");
+        }
+
+        var code = request?.Code?.Trim();
+        if (string.IsNullOrEmpty(code))
+        {
+            return BadRequest(new { error = "missing_code", message = "Enter the code shown on your device." });
+        }
+
+        if (_qcAttemptLimiter.IsBlocked(userId.Value, out var retryAfter))
+        {
+            Response.Headers["Retry-After"] =
+                ((int)retryAfter.TotalSeconds).ToString(System.Globalization.CultureInfo.InvariantCulture);
+            return StatusCode(429, new
+            {
+                error = "too_many_attempts",
+                message = $"Too many incorrect codes. Try again in {Math.Ceiling(retryAfter.TotalMinutes)} minute(s)."
+            });
+        }
+
+        if (!_quickConnect.IsEnabled)
+        {
+            return BadRequest(new
+            {
+                error = "quick_connect_disabled",
+                message = "Quick Connect is not enabled on this server. An administrator can turn it on under Dashboard > General."
+            });
+        }
+
+        try
+        {
+            var authorized = await _quickConnect.AuthorizeRequest(userId.Value, code).ConfigureAwait(false);
+            if (!authorized)
+            {
+                _qcAttemptLimiter.RecordFailure(userId.Value);
+                return BadRequest(new { error = "rejected", message = "That code could not be authorized. Check it and try again." });
+            }
+        }
+        catch (ResourceNotFoundException)
+        {
+            // Unknown or expired (10 minute lifetime). Almost always a mistype, so the page stays
+            // usable and the user simply retries — bounded by the attempt limiter above.
+            _qcAttemptLimiter.RecordFailure(userId.Value);
+            return BadRequest(new { error = "unknown_code", message = "That code wasn't recognised. Check the code on your device and try again." });
+        }
+        catch (AuthenticationException)
+        {
+            // Quick Connect was switched off between the IsEnabled check and here.
+            return BadRequest(new
+            {
+                error = "quick_connect_disabled",
+                message = "Quick Connect is not enabled on this server. An administrator can turn it on under Dashboard > General."
+            });
+        }
+        catch (InvalidOperationException)
+        {
+            // Jellyfin refuses to authorize the same request twice.
+            return BadRequest(new { error = "already_authorized", message = "That code has already been used. Start again on your device." });
+        }
+        catch (Exception ex)
+        {
+            // Catch-all so an unexpected type from a future Jellyfin cannot escape as an
+            // unhandled 500 with a stack trace.
+            _logger.LogError(ex, "Quick Connect authorization failed unexpectedly for user {UserId}", userId.Value);
+            return StatusCode(500, new { error = "internal_error", message = "Quick Connect authorization failed. Check the server log." });
+        }
+
+        _qcAttemptLimiter.RecordSuccess(userId.Value);
+
+        _logger.LogInformation("Quick Connect authorized via SSO bridge for user {UserId}", userId.Value);
+        await _rbacService.LogActivityAsync(
+            "Device authorized via SSO Quick Connect",
+            "OidcQuickConnectAuthorized",
+            userId.Value,
+            "Quick Connect bridge",
+            Microsoft.Extensions.Logging.LogLevel.Information).ConfigureAwait(false);
+
+        return Ok(new { Authorized = true });
+    }
+
     [HttpDelete("link/{providerId}")]
     [Authorize]
     public async Task<ActionResult> Unlink(string providerId)
@@ -803,9 +960,22 @@ public class OidcController : ControllerBase
 
     // ── Helpers ──────────────────────────────────────────────────────────────
 
+    /// <summary>
+    /// Resolves the calling Jellyfin user from the authenticated principal.
+    ///
+    /// Jellyfin's CustomAuthenticationHandler emits its own claim, <c>Jellyfin-UserId</c>
+    /// (Jellyfin.Api.Constants.InternalClaimTypes.UserId), formatted "N" with no dashes. It emits
+    /// none of the standard identity claim types, so checking only NameIdentifier/uid/sub — as
+    /// this did — always returned null, and every [Authorize] endpoint here answered
+    /// "Could not determine current user" for a perfectly valid session. Caught by exercising the
+    /// Quick Connect bridge against a real Jellyfin 12; it silently affected Link and Unlink too.
+    ///
+    /// The standard claim types are kept as fallbacks in case a future Jellyfin adds them.
+    /// </summary>
     private Guid? GetCurrentUserId()
     {
-        var userIdClaim = User.FindFirst(System.Security.Claims.ClaimTypes.NameIdentifier)?.Value
+        var userIdClaim = User.FindFirst("Jellyfin-UserId")?.Value
+                         ?? User.FindFirst(System.Security.Claims.ClaimTypes.NameIdentifier)?.Value
                          ?? User.FindFirst("uid")?.Value
                          ?? User.FindFirst("sub")?.Value;
         if (Guid.TryParse(userIdClaim, out var userId))
@@ -1015,6 +1185,213 @@ public class OidcController : ControllerBase
         Response.Headers["X-Frame-Options"] = "DENY";
     }
 
+    /// <summary>
+    /// Landing page for the Quick Connect bridge — a provider picker. Kept deliberately plain so
+    /// it is legible when read off a TV screen and typed into a phone.
+    /// </summary>
+    internal static string BuildQuickConnectLandingHtml(
+        IReadOnlyList<OidcProviderConfig> providers, bool quickConnectEnabled)
+    {
+        var body = new StringBuilder();
+
+        if (!quickConnectEnabled)
+        {
+            body.Append("<p class=\"warn\">Quick Connect is turned off on this server. " +
+                        "An administrator can enable it under Dashboard &gt; General.</p>");
+        }
+        else if (providers.Count == 0)
+        {
+            body.Append("<p class=\"warn\">No single sign-on providers are enabled.</p>");
+        }
+        else
+        {
+            body.Append("<p>Sign in, then enter the code shown on your device.</p>");
+            foreach (var p in providers)
+            {
+                // ProviderId is regex-constrained to [A-Za-z0-9_-] at config-save time, so it is
+                // safe in both the href and the id. DisplayName is admin-supplied free text and
+                // is HTML-escaped. ButtonColor is admin-supplied and unvalidated, so it is
+                // confined to a single CSS property value — never concatenated into a style block.
+                body.Append(CultureInfo.InvariantCulture, $"<a class=\"btn\" style=\"background:{HtmlEncode(p.ButtonColor)}\" href=\"Start/{p.ProviderId}\">Sign in with {HtmlEncode(p.DisplayName)}</a>");
+            }
+        }
+
+        return $$"""
+        <!DOCTYPE html>
+        <html>
+        <head>
+          <title>Sign in a device</title>
+          <meta name="viewport" content="width=device-width,initial-scale=1">
+          <style>
+            body { font-family: system-ui, sans-serif; background: #101010; color: #eee;
+                   display: flex; align-items: center; justify-content: center; min-height: 100vh; margin: 0; }
+            .card { max-width: 22em; width: 90%; text-align: center; }
+            .btn { display: block; margin: .6em 0; padding: .8em 1.4em; color: #fff;
+                   text-decoration: none; border-radius: 4px; font-size: 1em; }
+            .warn { color: #ffb27f; }
+          </style>
+        </head>
+        <body>
+          <div class="card">
+            <h2>Sign in a device</h2>
+            {{body}}
+          </div>
+        </body>
+        </html>
+        """;
+    }
+
+    /// <summary>
+    /// The code-entry page shown after a successful SSO login in the Quick Connect flow.
+    ///
+    /// It first exchanges the one-shot session token for a real Jellyfin session via /Auth (the
+    /// same call the normal callback makes), then keeps that access token in memory only — it is
+    /// deliberately NOT written to localStorage, because this browser is a helper for signing in
+    /// a television, not a device the user is trying to sign in to.
+    /// </summary>
+    private static string BuildQuickConnectHtml(string sessionToken, string providerId)
+    {
+        // Same rule as BuildCallbackHtml: everything crossing into <script> is JSON-encoded.
+        var encodedToken = JsonSerializer.Serialize(sessionToken);
+        var encodedProvider = JsonSerializer.Serialize(providerId);
+        var appVersion = OidcPlugin.Instance?.Version?.ToString() ?? "0.0.0";
+        var encodedVersion = JsonSerializer.Serialize(appVersion);
+
+        return $$"""
+        <!DOCTYPE html>
+        <html>
+        <head>
+          <title>Enter your code</title>
+          <meta name="viewport" content="width=device-width,initial-scale=1">
+          <style>
+            body { font-family: system-ui, sans-serif; background: #101010; color: #eee;
+                   display: flex; align-items: center; justify-content: center; min-height: 100vh; margin: 0; }
+            .card { max-width: 22em; width: 90%; text-align: center; }
+            input { font-size: 2em; letter-spacing: .3em; text-align: center; width: 100%;
+                    box-sizing: border-box; padding: .3em; margin: .5em 0;
+                    background: #1c1c1c; color: #eee; border: 1px solid #444; border-radius: 4px; }
+            button { font-size: 1em; padding: .8em 1.4em; width: 100%; border: 0; border-radius: 4px;
+                     background: #00a4dc; color: #fff; cursor: pointer; }
+            button[disabled] { opacity: .5; cursor: default; }
+            .msg { min-height: 1.4em; margin-top: .8em; }
+            .err { color: #ff8f8f; }
+            .ok { color: #8fdc8f; }
+          </style>
+        </head>
+        <body>
+          <div class="card">
+            <h2 id="heading">Signing you in...</h2>
+            <div id="form" style="display:none">
+              <p>Enter the code shown on your device.</p>
+              <input id="code" inputmode="numeric" autocomplete="one-time-code" maxlength="8" aria-label="Quick Connect code">
+              <button id="go">Authorize</button>
+            </div>
+            <p class="msg" id="msg"></p>
+          </div>
+        <script>
+        (function() {
+            const token = {{encodedToken}};
+            const providerId = {{encodedProvider}};
+            const msg = document.getElementById('msg');
+            const heading = document.getElementById('heading');
+            const form = document.getElementById('form');
+            const codeInput = document.getElementById('code');
+            const go = document.getElementById('go');
+            let accessToken = null;
+
+            function fail(text) { msg.className = 'msg err'; msg.textContent = text; }
+
+            function newDeviceId() {
+                // crypto.randomUUID is secure-context only; a LAN server over plain HTTP has none.
+                if (crypto && typeof crypto.randomUUID === 'function') { return crypto.randomUUID(); }
+                if (crypto && typeof crypto.getRandomValues === 'function') {
+                    const b = new Uint8Array(16);
+                    crypto.getRandomValues(b);
+                    b[6] = (b[6] & 0x0f) | 0x40;
+                    b[8] = (b[8] & 0x3f) | 0x80;
+                    const h = Array.from(b, x => x.toString(16).padStart(2, '0')).join('');
+                    return h.slice(0, 8) + '-' + h.slice(8, 12) + '-' + h.slice(12, 16) + '-' +
+                           h.slice(16, 20) + '-' + h.slice(20);
+                }
+                return 'oidc-qc-' + Date.now().toString(16);
+            }
+
+            // Exchange the one-shot session token for a real Jellyfin session. The resulting
+            // access token stays in this closure; nothing is written to localStorage, so this
+            // browser does not become a signed-in Jellyfin client as a side effect.
+            fetch('Auth/' + encodeURIComponent(providerId), {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    Token: token,
+                    DeviceId: newDeviceId(),
+                    DeviceName: 'Quick Connect bridge',
+                    App: 'Jellyfin OIDC Quick Connect',
+                    AppVersion: {{encodedVersion}}
+                })
+            })
+            .then(function(r) {
+                if (!r.ok) { throw new Error('Sign-in failed (' + r.status + ')'); }
+                return r.json();
+            })
+            .then(function(auth) {
+                accessToken = auth.AccessToken;
+                heading.textContent = 'Enter your code';
+                form.style.display = '';
+                codeInput.focus();
+            })
+            .catch(function(e) { heading.textContent = 'Sign-in failed'; fail(e.message); });
+
+            function authorize() {
+                const code = (codeInput.value || '').trim();
+                if (!code) { fail('Enter the code shown on your device.'); return; }
+                go.disabled = true;
+                msg.className = 'msg';
+                msg.textContent = 'Authorizing...';
+
+                fetch('QuickConnect/Authorize', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                        'Authorization': 'MediaBrowser Token="' + accessToken + '"'
+                    },
+                    body: JSON.stringify({ Code: code })
+                })
+                .then(function(r) { return r.json().then(function(b) { return { ok: r.ok, body: b }; }); })
+                .then(function(res) {
+                    if (!res.ok) {
+                        go.disabled = false;
+                        fail(res.body && res.body.message ? res.body.message : 'Authorization failed.');
+                        codeInput.select();
+                        return;
+                    }
+                    form.style.display = 'none';
+                    heading.textContent = 'Device signed in';
+                    msg.className = 'msg ok';
+                    msg.textContent = 'You can close this page and return to your device.';
+                })
+                .catch(function() { go.disabled = false; fail('Could not reach the server. Try again.'); });
+            }
+
+            go.addEventListener('click', authorize);
+            codeInput.addEventListener('keydown', function(e) { if (e.key === 'Enter') { authorize(); } });
+        })();
+        </script>
+        </body>
+        </html>
+        """;
+    }
+
+    /// <summary>Minimal HTML text escaper for admin-supplied values in the generated pages.</summary>
+    internal static string HtmlEncode(string? value) =>
+        string.IsNullOrEmpty(value)
+            ? string.Empty
+            : value.Replace("&", "&amp;", StringComparison.Ordinal)
+                   .Replace("<", "&lt;", StringComparison.Ordinal)
+                   .Replace(">", "&gt;", StringComparison.Ordinal)
+                   .Replace("\"", "&quot;", StringComparison.Ordinal)
+                   .Replace("'", "&#39;", StringComparison.Ordinal);
+
     private static string BuildCallbackHtml(string sessionToken, string providerId)
     {
         // Every value that crosses into the <script> body is JSON-encoded. JsonSerializer
@@ -1129,4 +1506,10 @@ public class AuthenticateRequest
     public string? DeviceName { get; set; }
     public string? App { get; set; }
     public string? AppVersion { get; set; }
+}
+
+/// <summary>Body of a Quick Connect bridge authorization: the code the user read off their device.</summary>
+public class QuickConnectAuthorizeRequest
+{
+    public string? Code { get; set; }
 }
