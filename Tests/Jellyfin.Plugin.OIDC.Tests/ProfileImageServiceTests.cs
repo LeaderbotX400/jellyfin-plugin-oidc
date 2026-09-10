@@ -7,9 +7,11 @@ using System.Net.Http.Headers;
 using System.Threading;
 using System.Threading.Tasks;
 using Jellyfin.Database.Implementations.Entities;
+using Jellyfin.Plugin.OIDC.Api;
 using Jellyfin.Plugin.OIDC.Configuration;
 using Jellyfin.Plugin.OIDC.Services;
 using MediaBrowser.Controller;
+using Microsoft.AspNetCore.Mvc;
 using MediaBrowser.Controller.Library;
 using MediaBrowser.Controller.Providers;
 using Microsoft.Extensions.Logging.Abstractions;
@@ -688,4 +690,73 @@ public sealed class PictureAllowedHostsValidationTests
     [Fact]
     public void EmptyList_IsFine()
         => ProviderConfigValidator.ValidateOrThrow(ProviderWith());
+}
+
+/// <summary>
+/// Save-time validation failures must reach the admin as a readable 400, not an opaque 500.
+/// Before this, the exception escaped <c>ConfigController.SaveConfig</c> and ASP.NET turned it
+/// into "Error processing request" with no reason — the admin saw the save fail and could not
+/// tell why, which defeats the point of validating at save time at all.
+/// </summary>
+public sealed class ConfigSaveErrorSurfacingTests
+{
+    private sealed class ThrowingConfigProvider : IPluginConfigProvider
+    {
+        private readonly Exception _toThrow;
+        public ThrowingConfigProvider(Exception toThrow) => _toThrow = toThrow;
+        public PluginConfiguration GetConfiguration() => new();
+        public void SaveConfiguration(PluginConfiguration config) => throw _toThrow;
+    }
+
+    private static ActionResult Save(Exception thrown)
+    {
+        var controller = new ConfigController(
+            new RbacService(
+                new Mock<IUserManager>().Object,
+                new Mock<ILibraryManager>().Object,
+                new Mock<MediaBrowser.Model.Activity.IActivityManager>().Object,
+                new StubConfigProvider(),
+                NullLogger<RbacService>.Instance),
+            new StubHttpClientFactory(),
+            new ThrowingConfigProvider(thrown),
+            new OidcUserStore(Path.Combine(Path.GetTempPath(), $"cfgerr-{Guid.NewGuid():N}.json")),
+            NullLogger<ConfigController>.Instance);
+
+        return controller.SaveConfig(new PluginConfiguration());
+    }
+
+    [Fact]
+    public void InvalidOperationException_BecomesBadRequestCarryingTheMessage()
+    {
+        const string message = "Provider 'acme' PictureAllowedHosts entry 'https://x/' is not a bare hostname.";
+
+        var result = Assert.IsType<BadRequestObjectResult>(Save(new InvalidOperationException(message)));
+
+        // Read the property off the anonymous payload rather than its serialized form —
+        // JSON escaping turns the apostrophes in "Provider 'acme'" into '.
+        var payload = result.Value!;
+        var actual = payload.GetType().GetProperty("message")!.GetValue(payload) as string;
+
+        Assert.Equal(message, actual);
+    }
+
+    [Fact]
+    public void ArgumentException_BecomesBadRequest()
+        => Assert.IsType<BadRequestObjectResult>(Save(new ArgumentException("Invalid plugin configuration: bad")));
+
+    /// <summary>Anything unexpected must still propagate — only validation failures become 400s.</summary>
+    [Fact]
+    public void UnexpectedException_StillPropagates()
+        => Assert.Throws<NotSupportedException>(() => Save(new NotSupportedException("disk on fire")));
+
+    private sealed class StubConfigProvider : IPluginConfigProvider
+    {
+        public PluginConfiguration GetConfiguration() => new();
+        public void SaveConfiguration(PluginConfiguration config) { }
+    }
+
+    private sealed class StubHttpClientFactory : IHttpClientFactory
+    {
+        public HttpClient CreateClient(string name) => new();
+    }
 }
