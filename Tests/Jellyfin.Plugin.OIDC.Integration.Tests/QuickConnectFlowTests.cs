@@ -125,7 +125,7 @@ public class QuickConnectFlowTests : IClassFixture<MockIdpFixture>
 
         var html = Assert.IsType<ContentResult>(fixture.Controller.QuickConnectLanding()).Content!;
 
-        Assert.Contains("Start/testidp", html, StringComparison.Ordinal);
+        Assert.Contains("/sso/OIDC/QuickConnect/Start/testidp", html, StringComparison.Ordinal);
     }
 
     [Fact]

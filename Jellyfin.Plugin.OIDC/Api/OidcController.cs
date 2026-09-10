@@ -513,7 +513,7 @@ public class OidcController : ControllerBase
         // for the code shown on the native device.
         if (oidcState.QuickConnect)
         {
-            return Content(BuildQuickConnectHtml(sessionToken, providerId), "text/html");
+            return Content(BuildQuickConnectHtml(sessionToken, providerId, PluginBasePath()), "text/html");
         }
 
         return Content(BuildCallbackHtml(sessionToken, providerId), "text/html");
@@ -806,7 +806,7 @@ public class OidcController : ControllerBase
     {
         var providers = _configProvider.GetConfiguration().Providers.Where(p => p.Enabled).ToList();
         SetCallbackSecurityHeaders();
-        return Content(BuildQuickConnectLandingHtml(providers, _quickConnect.IsEnabled), "text/html");
+        return Content(BuildQuickConnectLandingHtml(providers, _quickConnect.IsEnabled, PluginBasePath()), "text/html");
     }
 
     /// <summary>Same login flow as <see cref="Start"/>, but the callback ends at the code-entry page.</summary>
@@ -1189,8 +1189,23 @@ public class OidcController : ControllerBase
     /// Landing page for the Quick Connect bridge — a provider picker. Kept deliberately plain so
     /// it is legible when read off a TV screen and typed into a phone.
     /// </summary>
+    /// <summary>
+    /// Absolute path prefix for this plugin's routes, honouring a configured Jellyfin base URL.
+    ///
+    /// Relative hrefs are NOT usable in these generated pages: the landing page lives at
+    /// /sso/OIDC/QuickConnect (base /sso/OIDC/) while the code-entry page is served from
+    /// /sso/OIDC/Callback/{providerId} (base /sso/OIDC/Callback/), so the same relative string
+    /// resolves to two different places. Getting this wrong sent the Quick Connect button to the
+    /// ordinary login flow.
+    /// </summary>
+    private string PluginBasePath()
+    {
+        var pathBase = Request.PathBase.HasValue ? Request.PathBase.Value!.TrimEnd('/') : string.Empty;
+        return pathBase + "/sso/OIDC/";
+    }
+
     internal static string BuildQuickConnectLandingHtml(
-        IReadOnlyList<OidcProviderConfig> providers, bool quickConnectEnabled)
+        IReadOnlyList<OidcProviderConfig> providers, bool quickConnectEnabled, string basePath)
     {
         var body = new StringBuilder();
 
@@ -1212,7 +1227,7 @@ public class OidcController : ControllerBase
                 // safe in both the href and the id. DisplayName is admin-supplied free text and
                 // is HTML-escaped. ButtonColor is admin-supplied and unvalidated, so it is
                 // confined to a single CSS property value — never concatenated into a style block.
-                body.Append(CultureInfo.InvariantCulture, $"<a class=\"btn\" style=\"background:{HtmlEncode(p.ButtonColor)}\" href=\"Start/{p.ProviderId}\">Sign in with {HtmlEncode(p.DisplayName)}</a>");
+                body.Append(CultureInfo.InvariantCulture, $"<a class=\"btn\" style=\"background:{HtmlEncode(p.ButtonColor)}\" href=\"{basePath}QuickConnect/Start/{p.ProviderId}\">Sign in with {HtmlEncode(p.DisplayName)}</a>");
             }
         }
 
@@ -1249,13 +1264,14 @@ public class OidcController : ControllerBase
     /// deliberately NOT written to localStorage, because this browser is a helper for signing in
     /// a television, not a device the user is trying to sign in to.
     /// </summary>
-    private static string BuildQuickConnectHtml(string sessionToken, string providerId)
+    private static string BuildQuickConnectHtml(string sessionToken, string providerId, string basePath)
     {
         // Same rule as BuildCallbackHtml: everything crossing into <script> is JSON-encoded.
         var encodedToken = JsonSerializer.Serialize(sessionToken);
         var encodedProvider = JsonSerializer.Serialize(providerId);
         var appVersion = OidcPlugin.Instance?.Version?.ToString() ?? "0.0.0";
         var encodedVersion = JsonSerializer.Serialize(appVersion);
+        var encodedBase = JsonSerializer.Serialize(basePath);
 
         return $$"""
         <!DOCTYPE html>
@@ -1292,6 +1308,7 @@ public class OidcController : ControllerBase
         (function() {
             const token = {{encodedToken}};
             const providerId = {{encodedProvider}};
+            const basePath = {{encodedBase}};
             const msg = document.getElementById('msg');
             const heading = document.getElementById('heading');
             const form = document.getElementById('form');
@@ -1319,7 +1336,7 @@ public class OidcController : ControllerBase
             // Exchange the one-shot session token for a real Jellyfin session. The resulting
             // access token stays in this closure; nothing is written to localStorage, so this
             // browser does not become a signed-in Jellyfin client as a side effect.
-            fetch('Auth/' + encodeURIComponent(providerId), {
+            fetch(basePath + 'Auth/' + encodeURIComponent(providerId), {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({
@@ -1349,7 +1366,7 @@ public class OidcController : ControllerBase
                 msg.className = 'msg';
                 msg.textContent = 'Authorizing...';
 
-                fetch('QuickConnect/Authorize', {
+                fetch(basePath + 'QuickConnect/Authorize', {
                     method: 'POST',
                     headers: {
                         'Content-Type': 'application/json',
@@ -1369,6 +1386,16 @@ public class OidcController : ControllerBase
                     heading.textContent = 'Device signed in';
                     msg.className = 'msg ok';
                     msg.textContent = 'You can close this page and return to your device.';
+
+                    // Dispose of this browser's own session. It existed only to prove who was
+                    // authorizing; leaving it behind would accumulate a live token and a stray
+                    // "Quick Connect bridge" entry in the user's device list on every use.
+                    // Best-effort: the device is already signed in either way.
+                    fetch('/Sessions/Logout', {
+                        method: 'POST',
+                        headers: { 'Authorization': 'MediaBrowser Token="' + accessToken + '"' }
+                    }).catch(function() { /* nothing useful to do */ });
+                    accessToken = null;
                 })
                 .catch(function() { go.disabled = false; fail('Could not reach the server. Try again.'); });
             }

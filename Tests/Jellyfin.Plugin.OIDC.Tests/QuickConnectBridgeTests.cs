@@ -22,26 +22,26 @@ public sealed class QuickConnectLandingHtmlTests
     public void ListsEachEnabledProviderWithARelativeStartLink()
     {
         var html = OidcController.BuildQuickConnectLandingHtml(
-            new[] { Provider("authentik", "Authentik"), Provider("keycloak", "Keycloak") }, true);
+            new[] { Provider("authentik", "Authentik"), Provider("keycloak", "Keycloak") }, true, "/sso/OIDC/");
 
-        Assert.Contains("href=\"Start/authentik\"", html, StringComparison.Ordinal);
-        Assert.Contains("href=\"Start/keycloak\"", html, StringComparison.Ordinal);
+        Assert.Contains("href=\"/sso/OIDC/QuickConnect/Start/authentik\"", html, StringComparison.Ordinal);
+        Assert.Contains("href=\"/sso/OIDC/QuickConnect/Start/keycloak\"", html, StringComparison.Ordinal);
         Assert.Contains("Sign in with Authentik", html, StringComparison.Ordinal);
     }
 
     [Fact]
     public void SaysSoWhenQuickConnectIsDisabledServerWide()
     {
-        var html = OidcController.BuildQuickConnectLandingHtml(new[] { Provider("a", "A") }, false);
+        var html = OidcController.BuildQuickConnectLandingHtml(new[] { Provider("a", "A") }, false, "/sso/OIDC/");
 
         Assert.Contains("Quick Connect is turned off", html, StringComparison.Ordinal);
-        Assert.DoesNotContain("href=\"Start/a\"", html, StringComparison.Ordinal);
+        Assert.DoesNotContain("QuickConnect/Start/a", html, StringComparison.Ordinal);
     }
 
     [Fact]
     public void SaysSoWhenNoProvidersAreEnabled()
     {
-        var html = OidcController.BuildQuickConnectLandingHtml(Array.Empty<OidcProviderConfig>(), true);
+        var html = OidcController.BuildQuickConnectLandingHtml(Array.Empty<OidcProviderConfig>(), true, "/sso/OIDC/");
 
         Assert.Contains("No single sign-on providers are enabled", html, StringComparison.Ordinal);
     }
@@ -51,7 +51,7 @@ public sealed class QuickConnectLandingHtmlTests
     public void EscapesHostileDisplayNames()
     {
         var html = OidcController.BuildQuickConnectLandingHtml(
-            new[] { Provider("p1", "</a><script>alert(1)</script>") }, true);
+            new[] { Provider("p1", "</a><script>alert(1)</script>") }, true, "/sso/OIDC/");
 
         Assert.DoesNotContain("<script>alert(1)</script>", html, StringComparison.Ordinal);
         Assert.Contains("&lt;script&gt;", html, StringComparison.Ordinal);
@@ -65,7 +65,7 @@ public sealed class QuickConnectLandingHtmlTests
     public void EscapesHostileButtonColours()
     {
         var html = OidcController.BuildQuickConnectLandingHtml(
-            new[] { Provider("p1", "P", "red\"><script>alert(1)</script>") }, true);
+            new[] { Provider("p1", "P", "red\"><script>alert(1)</script>") }, true, "/sso/OIDC/");
 
         Assert.DoesNotContain("<script>alert(1)</script>", html, StringComparison.Ordinal);
         Assert.Contains("&quot;", html, StringComparison.Ordinal);
@@ -242,5 +242,43 @@ public sealed class QuickConnectStateTests : IDisposable
         Assert.DoesNotContain(properties, p =>
             p.Name.Contains("Code", StringComparison.OrdinalIgnoreCase)
             || p.Name.Contains("Secret", StringComparison.OrdinalIgnoreCase));
+    }
+}
+
+/// <summary>
+/// Regression cover for the URL-resolution bug this feature shipped with initially.
+///
+/// The landing page is served from /sso/OIDC/QuickConnect (relative base /sso/OIDC/) and the
+/// code-entry page from /sso/OIDC/Callback/{providerId} (relative base /sso/OIDC/Callback/), so
+/// a path-relative href means two different things depending on which page emitted it. The
+/// original "Start/{id}" silently resolved to the ORDINARY login flow, which completed a normal
+/// web sign-in instead of ever showing the code form — invisible to every unit test, and only
+/// caught by clicking the button in a real browser.
+/// </summary>
+public sealed class QuickConnectUrlResolutionTests
+{
+    private static OidcProviderConfig Provider(string id)
+        => new() { ProviderId = id, DisplayName = id, Enabled = true };
+
+    [Fact]
+    public void LandingLinksAreRootRelativeAndTargetTheQuickConnectStart()
+    {
+        var html = OidcController.BuildQuickConnectLandingHtml(
+            new[] { Provider("authentik") }, true, "/sso/OIDC/");
+
+        Assert.Contains("href=\"/sso/OIDC/QuickConnect/Start/authentik\"", html, StringComparison.Ordinal);
+
+        // The bug: a bare "Start/..." resolves to the plain login flow from this page's base.
+        Assert.DoesNotContain("href=\"Start/", html, StringComparison.Ordinal);
+    }
+
+    /// <summary>A configured Jellyfin base URL must be carried into the generated links.</summary>
+    [Fact]
+    public void LandingLinksHonourABaseUrl()
+    {
+        var html = OidcController.BuildQuickConnectLandingHtml(
+            new[] { Provider("authentik") }, true, "/jellyfin/sso/OIDC/");
+
+        Assert.Contains("href=\"/jellyfin/sso/OIDC/QuickConnect/Start/authentik\"", html, StringComparison.Ordinal);
     }
 }

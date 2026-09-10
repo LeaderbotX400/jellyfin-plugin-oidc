@@ -61,15 +61,16 @@ public class LoginButtonController : ControllerBase
 
         // Discoverability for the Quick Connect bridge. Native clients (Android, Swiftfin,
         // Android TV) cannot show these buttons at all, so this is the path a user follows on a
-        // second device to sign a television in. Relative href so a base URL is handled without
-        // having to read one.
+        // second device to sign a television in. Root-relative, matching the provider buttons
+        // above: this script runs inside /web/index.html, so a path-relative href would resolve
+        // against /web/ and 404.
         // No interpolation here, but assigned from a JSON literal like every other cssText in
         // this script so the "cssText is never a single-quoted interpolation" invariant that
         // LoginButtonScriptEscapingTests enforces stays trivially checkable.
         var jsonQcCss = JsonSerializer.Serialize(
             "display:block;margin:0.4em auto;text-align:center;font-size:0.9em;color:#00a4dc;");
         sb.AppendLine("    var qc = document.createElement('a');");
-        sb.AppendLine("    qc.href = 'sso/OIDC/QuickConnect';");
+        sb.AppendLine("    qc.href = '/sso/OIDC/QuickConnect';");
         sb.AppendLine("    qc.textContent = 'Sign in a TV or mobile app';");
         sb.AppendLine(CultureInfo.InvariantCulture, $"    qc.style.cssText = {jsonQcCss};");
         sb.AppendLine("    container.appendChild(qc);");
