@@ -598,6 +598,12 @@ export default function (view) {
             if (alEl) alEl.checked = cfg.AllowLastAdminDemotion === true;
             var aiEl = view.querySelector("#autoInjectLoginButtons");
             if (aiEl) aiEl.checked = cfg.AutoInjectLoginButtons !== false;
+            var rsEl = view.querySelector('#requireSsoForAll');
+            if (rsEl) rsEl.checked = cfg.RequireSsoForAll === true;
+            var seaEl = view.querySelector('#ssoExemptAdmins');
+            if (seaEl) seaEl.checked = cfg.SsoExemptAdmins !== false;
+            var secEl = view.querySelector('#ssoExemptCidrs');
+            if (secEl) secEl.value = (cfg.SsoExemptCidrs || []).join(', ');
             var vclEl = view.querySelector('#verboseClaimLogging');
             if (vclEl) vclEl.checked = cfg.VerboseClaimLogging === true;
             var tfEl = view.querySelector('#cfg_trustforwarded');
@@ -712,6 +718,9 @@ export default function (view) {
         cfg.RbacBehavior = view.querySelector('#rbacBehavior').value || 'EntitlementsAuthoritative';
         cfg.AllowLastAdminDemotion = gchk(view, 'allowLastAdminDemotion');
         cfg.AutoInjectLoginButtons = gchk(view, "autoInjectLoginButtons");
+        cfg.RequireSsoForAll = gchk(view, "requireSsoForAll");
+        cfg.SsoExemptAdmins = gchk(view, "ssoExemptAdmins");
+        cfg.SsoExemptCidrs = gval(view, "ssoExemptCidrs").split(",").map(function (s) { return s.trim(); }).filter(function (s) { return s.length > 0; });
         cfg.VerboseClaimLogging = gchk(view, 'verboseClaimLogging');
         cfg.TrustForwardedHeaders = gchk(view, 'cfg_trustforwarded');
         cfg.TrustedProxyCidrs = gval(view, 'cfg_trustedcidrs')

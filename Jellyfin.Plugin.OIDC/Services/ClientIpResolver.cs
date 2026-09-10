@@ -147,7 +147,13 @@ public static class ClientIpResolver
         return httpContext.Request.Host.Value ?? string.Empty;
     }
 
-    private static bool IsInAny(IPAddress ip, IReadOnlyList<IPNetwork> ranges)
+    /// <summary>
+    /// True when <paramref name="ip"/> falls inside any of <paramref name="ranges"/>. Public so
+    /// callers that do their own CIDR matching (the Require-SSO exemption list) get the same
+    /// IPv4-mapped-IPv6 normalisation as the forwarded-header logic, rather than reimplementing
+    /// containment and quietly failing to match a v4 client arriving as ::ffff:a.b.c.d.
+    /// </summary>
+    public static bool IsInAny(IPAddress ip, IReadOnlyList<IPNetwork> ranges)
     {
         // Normalize ::ffff:a.b.c.d so a v4 CIDR can match a v4-mapped v6 form.
         if (ip.IsIPv4MappedToIPv6) ip = ip.MapToIPv4();
