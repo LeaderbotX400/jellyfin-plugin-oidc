@@ -155,3 +155,156 @@ public class QuickConnectFlowTests : IClassFixture<MockIdpFixture>
             q => q.AuthorizeRequest(It.IsAny<Guid>(), It.IsAny<string>()), Times.Never);
     }
 }
+
+/// <summary>
+/// Resolving the caller from the authenticated principal. Jellyfin emits its own
+/// <c>Jellyfin-UserId</c> claim and none of the standard identity claim types, so getting this
+/// wrong makes every [Authorize] endpoint in the plugin reject valid sessions — which is exactly
+/// what happened until a real-server test caught it.
+/// </summary>
+public class CurrentUserClaimTests : IClassFixture<MockIdpFixture>
+{
+    private readonly MockIdpFixture _idp;
+
+    public CurrentUserClaimTests(MockIdpFixture idp) => _idp = idp;
+
+    private static void SignIn(Microsoft.AspNetCore.Mvc.ControllerBase controller, params System.Security.Claims.Claim[] claims)
+    {
+        controller.ControllerContext.HttpContext.User =
+            new System.Security.Claims.ClaimsPrincipal(
+                new System.Security.Claims.ClaimsIdentity(claims, "Test"));
+    }
+
+    /// <summary>Jellyfin formats the claim "N" — 32 hex chars, no dashes.</summary>
+    [Fact]
+    public async Task JellyfinUserIdClaim_IsAccepted()
+    {
+        var fixture = new TestFixture(_idp);
+        fixture.AddProvider();
+        var userId = Guid.NewGuid();
+        SignIn(fixture.Controller, new System.Security.Claims.Claim("Jellyfin-UserId", userId.ToString("N")));
+
+        var result = await fixture.Controller.QuickConnectAuthorize(
+            new Jellyfin.Plugin.OIDC.Api.QuickConnectAuthorizeRequest { Code = "123456" });
+
+        Assert.IsType<OkObjectResult>(result);
+        fixture.QuickConnectMock.Verify(q => q.AuthorizeRequest(userId, "123456"), Times.Once);
+    }
+
+    [Fact]
+    public async Task NameIdentifierClaim_StillWorksAsAFallback()
+    {
+        var fixture = new TestFixture(_idp);
+        fixture.AddProvider();
+        var userId = Guid.NewGuid();
+        SignIn(fixture.Controller, new System.Security.Claims.Claim(
+            System.Security.Claims.ClaimTypes.NameIdentifier, userId.ToString()));
+
+        Assert.IsType<OkObjectResult>(await fixture.Controller.QuickConnectAuthorize(
+            new Jellyfin.Plugin.OIDC.Api.QuickConnectAuthorizeRequest { Code = "123456" }));
+    }
+
+    /// <summary>The code is trimmed before it reaches Jellyfin, so stray whitespace still matches.</summary>
+    [Fact]
+    public async Task CodeIsTrimmed()
+    {
+        var fixture = new TestFixture(_idp);
+        fixture.AddProvider();
+        var userId = Guid.NewGuid();
+        SignIn(fixture.Controller, new System.Security.Claims.Claim("Jellyfin-UserId", userId.ToString("N")));
+
+        await fixture.Controller.QuickConnectAuthorize(
+            new Jellyfin.Plugin.OIDC.Api.QuickConnectAuthorizeRequest { Code = "  123456 " });
+
+        fixture.QuickConnectMock.Verify(q => q.AuthorizeRequest(userId, "123456"), Times.Once);
+    }
+
+    [Theory]
+    [InlineData(null)]
+    [InlineData("")]
+    [InlineData("   ")]
+    public async Task BlankCodeIsRejectedWithoutCallingJellyfin(string? code)
+    {
+        var fixture = new TestFixture(_idp);
+        fixture.AddProvider();
+        SignIn(fixture.Controller, new System.Security.Claims.Claim("Jellyfin-UserId", Guid.NewGuid().ToString("N")));
+
+        Assert.IsType<BadRequestObjectResult>(await fixture.Controller.QuickConnectAuthorize(
+            new Jellyfin.Plugin.OIDC.Api.QuickConnectAuthorizeRequest { Code = code }));
+        fixture.QuickConnectMock.Verify(
+            q => q.AuthorizeRequest(It.IsAny<Guid>(), It.IsAny<string>()), Times.Never);
+    }
+
+    [Fact]
+    public async Task UnknownCode_IsReportedAsRetryable()
+    {
+        var fixture = new TestFixture(_idp);
+        fixture.AddProvider();
+        SignIn(fixture.Controller, new System.Security.Claims.Claim("Jellyfin-UserId", Guid.NewGuid().ToString("N")));
+        fixture.QuickConnectMock.Setup(q => q.AuthorizeRequest(It.IsAny<Guid>(), It.IsAny<string>()))
+            .ThrowsAsync(new MediaBrowser.Common.Extensions.ResourceNotFoundException("nope"));
+
+        var result = Assert.IsType<BadRequestObjectResult>(await fixture.Controller.QuickConnectAuthorize(
+            new Jellyfin.Plugin.OIDC.Api.QuickConnectAuthorizeRequest { Code = "999999" }));
+
+        Assert.Contains("unknown_code", System.Text.Json.JsonSerializer.Serialize(result.Value), StringComparison.Ordinal);
+        Assert.Contains("recognised", System.Text.Json.JsonSerializer.Serialize(result.Value), StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task AlreadyAuthorizedCode_IsReportedDistinctly()
+    {
+        var fixture = new TestFixture(_idp);
+        fixture.AddProvider();
+        SignIn(fixture.Controller, new System.Security.Claims.Claim("Jellyfin-UserId", Guid.NewGuid().ToString("N")));
+        fixture.QuickConnectMock.Setup(q => q.AuthorizeRequest(It.IsAny<Guid>(), It.IsAny<string>()))
+            .ThrowsAsync(new InvalidOperationException("Request is already authorized"));
+
+        var result = Assert.IsType<BadRequestObjectResult>(await fixture.Controller.QuickConnectAuthorize(
+            new Jellyfin.Plugin.OIDC.Api.QuickConnectAuthorizeRequest { Code = "123456" }));
+
+        Assert.Contains("already been used", System.Text.Json.JsonSerializer.Serialize(result.Value), StringComparison.Ordinal);
+    }
+
+    /// <summary>An unexpected type from a future Jellyfin must not escape as an unhandled 500.</summary>
+    [Fact]
+    public async Task UnexpectedException_IsContained()
+    {
+        var fixture = new TestFixture(_idp);
+        fixture.AddProvider();
+        SignIn(fixture.Controller, new System.Security.Claims.Claim("Jellyfin-UserId", Guid.NewGuid().ToString("N")));
+        fixture.QuickConnectMock.Setup(q => q.AuthorizeRequest(It.IsAny<Guid>(), It.IsAny<string>()))
+            .ThrowsAsync(new NotSupportedException("surprise"));
+
+        var result = Assert.IsType<ObjectResult>(await fixture.Controller.QuickConnectAuthorize(
+            new Jellyfin.Plugin.OIDC.Api.QuickConnectAuthorizeRequest { Code = "123456" }));
+
+        Assert.Equal(500, result.StatusCode);
+    }
+
+    /// <summary>Six wrong codes trips the per-user cap and stops calling Jellyfin at all.</summary>
+    [Fact]
+    public async Task RepeatedWrongCodes_TripTheAttemptLimiter()
+    {
+        var fixture = new TestFixture(_idp);
+        fixture.AddProvider();
+        SignIn(fixture.Controller, new System.Security.Claims.Claim("Jellyfin-UserId", Guid.NewGuid().ToString("N")));
+        fixture.QuickConnectMock.Setup(q => q.AuthorizeRequest(It.IsAny<Guid>(), It.IsAny<string>()))
+            .ThrowsAsync(new MediaBrowser.Common.Extensions.ResourceNotFoundException("nope"));
+
+        for (var i = 0; i < 5; i++)
+        {
+            Assert.IsType<BadRequestObjectResult>(await fixture.Controller.QuickConnectAuthorize(
+                new Jellyfin.Plugin.OIDC.Api.QuickConnectAuthorizeRequest { Code = "00000" + i }));
+        }
+
+        fixture.QuickConnectMock.Invocations.Clear();
+
+        var blocked = Assert.IsType<ObjectResult>(await fixture.Controller.QuickConnectAuthorize(
+            new Jellyfin.Plugin.OIDC.Api.QuickConnectAuthorizeRequest { Code = "123456" }));
+
+        Assert.Equal(429, blocked.StatusCode);
+        fixture.QuickConnectMock.Verify(
+            q => q.AuthorizeRequest(It.IsAny<Guid>(), It.IsAny<string>()), Times.Never);
+    }
+}

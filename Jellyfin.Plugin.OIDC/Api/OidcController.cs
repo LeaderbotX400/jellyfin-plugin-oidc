@@ -960,9 +960,22 @@ public class OidcController : ControllerBase
 
     // ── Helpers ──────────────────────────────────────────────────────────────
 
+    /// <summary>
+    /// Resolves the calling Jellyfin user from the authenticated principal.
+    ///
+    /// Jellyfin's CustomAuthenticationHandler emits its own claim, <c>Jellyfin-UserId</c>
+    /// (Jellyfin.Api.Constants.InternalClaimTypes.UserId), formatted "N" with no dashes. It emits
+    /// none of the standard identity claim types, so checking only NameIdentifier/uid/sub — as
+    /// this did — always returned null, and every [Authorize] endpoint here answered
+    /// "Could not determine current user" for a perfectly valid session. Caught by exercising the
+    /// Quick Connect bridge against a real Jellyfin 12; it silently affected Link and Unlink too.
+    ///
+    /// The standard claim types are kept as fallbacks in case a future Jellyfin adds them.
+    /// </summary>
     private Guid? GetCurrentUserId()
     {
-        var userIdClaim = User.FindFirst(System.Security.Claims.ClaimTypes.NameIdentifier)?.Value
+        var userIdClaim = User.FindFirst("Jellyfin-UserId")?.Value
+                         ?? User.FindFirst(System.Security.Claims.ClaimTypes.NameIdentifier)?.Value
                          ?? User.FindFirst("uid")?.Value
                          ?? User.FindFirst("sub")?.Value;
         if (Guid.TryParse(userIdClaim, out var userId))
