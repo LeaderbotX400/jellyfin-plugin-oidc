@@ -101,17 +101,23 @@ Go to **Role Mappings tab** and create mappings:
 - Libraries: Kids only
 - Max Parental Rating: 7
 
-### 3. Add the Login Button
+### 3. The Login Button
 
-Go to **Admin Dashboard > General > Branding > Login disclaimer** and paste:
+Nothing to do — the plugin splices its login-button script into the Jellyfin web UI itself, and a
+button appears on the login page for every enabled provider, styled with that provider's colour.
+
+If you would rather do it by hand — because another plugin also rewrites the web UI, or you want
+the button somewhere specific — turn off **Auto-inject login buttons** in the plugin's General
+settings and paste the tag from `GET /sso/OIDC/BrandingSnippet` into
+**Admin Dashboard > General > Branding > Login disclaimer**:
 
 ```html
-<a href="/sso/OIDC/Start/authentik"
-   class="raised block emby-button button-submit"
-   style="display:block;margin:1em 0;padding:.9em;text-align:center;text-decoration:none;">
-  Sign in with Authentik
-</a>
+<script src="/sso/OIDC/LoginButtons"></script>
 ```
+
+Injection is best-effort by design: if Jellyfin's web shell ever changes shape enough that the
+plugin cannot find an insertion point, it serves the page untouched and logs a warning telling you
+to use the manual snippet. It never breaks the web UI.
 
 ## Migrating Existing Users
 

@@ -3,6 +3,7 @@ using System.Net;
 using System.Net.Http;
 using Jellyfin.Plugin.OIDC.Auth;
 using MediaBrowser.Controller;
+using Microsoft.AspNetCore.Hosting;
 using MediaBrowser.Controller.Authentication;
 using MediaBrowser.Controller.Plugins;
 using MediaBrowser.Model.Activity;
@@ -47,6 +48,9 @@ public class ServiceRegistrator : IPluginServiceRegistrator
         // a delegate so tests can substitute a stub client.
         serviceCollection.AddSingleton<Func<IPAddress, HttpClient>>(_ => ProfileImageService.CreatePinnedClient);
         serviceCollection.AddScoped<ProfileImageService>();
+
+        // IStartupFilter is the only hook a plugin has for adding ASP.NET Core middleware.
+        serviceCollection.AddSingleton<IStartupFilter, LoginButtonStartupFilter>();
         serviceCollection.AddTransient<IScheduledTask, RbacResyncTask>();
     }
 }

@@ -596,6 +596,8 @@ export default function (view) {
             view.querySelector('#rbacBehavior').value = cfg.RbacBehavior || 'EntitlementsAuthoritative';
             var alEl = view.querySelector('#allowLastAdminDemotion');
             if (alEl) alEl.checked = cfg.AllowLastAdminDemotion === true;
+            var aiEl = view.querySelector("#autoInjectLoginButtons");
+            if (aiEl) aiEl.checked = cfg.AutoInjectLoginButtons !== false;
             var vclEl = view.querySelector('#verboseClaimLogging');
             if (vclEl) vclEl.checked = cfg.VerboseClaimLogging === true;
             var tfEl = view.querySelector('#cfg_trustforwarded');
@@ -709,6 +711,7 @@ export default function (view) {
         cfg.AutoCreateUsers = gchk(view, 'autoCreateUsers');
         cfg.RbacBehavior = view.querySelector('#rbacBehavior').value || 'EntitlementsAuthoritative';
         cfg.AllowLastAdminDemotion = gchk(view, 'allowLastAdminDemotion');
+        cfg.AutoInjectLoginButtons = gchk(view, "autoInjectLoginButtons");
         cfg.VerboseClaimLogging = gchk(view, 'verboseClaimLogging');
         cfg.TrustForwardedHeaders = gchk(view, 'cfg_trustforwarded');
         cfg.TrustedProxyCidrs = gval(view, 'cfg_trustedcidrs')
