@@ -21,10 +21,9 @@ public class OidcAuthProvider : IAuthenticationProvider
         throw new AuthenticationException("This account uses OIDC authentication. Please use the SSO login button.");
     }
 
-    public bool HasPassword(User user)
-    {
-        return false;
-    }
+    // NOTE: IAuthenticationProvider.HasPassword(User) was removed from the interface
+    // in Jellyfin 12.0. The implementation that used to live here (returning false)
+    // was deleted with the retarget — do not re-add it.
 
     public Task ChangePassword(User user, string newPassword)
     {

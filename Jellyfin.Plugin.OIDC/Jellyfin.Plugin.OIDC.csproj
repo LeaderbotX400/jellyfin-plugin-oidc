@@ -1,15 +1,23 @@
 <Project Sdk="Microsoft.NET.Sdk">
 
   <PropertyGroup>
-    <TargetFramework>net9.0</TargetFramework>
+    <!--
+      Jellyfin 12 only. The 12.0 server retargeted to .NET 10 and its NuGet packages
+      ship a net10.0 dependency group only, so this build cannot load on Jellyfin
+      10.11 — that server line stays on plugin 0.1.11.x. The targetAbi in
+      build.yaml/meta.json is what keeps Jellyfin's installer from offering this
+      build to a 10.x server.
+    -->
+    <TargetFramework>net10.0</TargetFramework>
     <RootNamespace>Jellyfin.Plugin.OIDC</RootNamespace>
     <AssemblyName>Jellyfin.Plugin.OIDC</AssemblyName>
     <Nullable>enable</Nullable>
     <ImplicitUsings>enable</ImplicitUsings>
     <GenerateDocumentationFile>false</GenerateDocumentationFile>
-    <Version>0.1.11.0</Version>
-    <AssemblyVersion>0.1.11.0</AssemblyVersion>
-    <FileVersion>0.1.11.0</FileVersion>
+    <!-- 0.2.x is the Jellyfin 12 line; 0.1.x was the Jellyfin 10.11 line. -->
+    <Version>0.2.0.0</Version>
+    <AssemblyVersion>0.2.0.0</AssemblyVersion>
+    <FileVersion>0.2.0.0</FileVersion>
     <!-- Static analysis: enable built-in NetAnalyzers at the recommended rule set -->
     <AnalysisLevel>latest-recommended</AnalysisLevel>
     <!-- Treat nullable warnings as hard errors; all CS86xx must be fixed, not suppressed -->
@@ -35,10 +43,10 @@
   </ItemGroup>
 
   <ItemGroup>
-    <PackageReference Include="Jellyfin.Controller" Version="10.11.3">
+    <PackageReference Include="Jellyfin.Controller" Version="12.0.0">
       <ExcludeAssets>runtime</ExcludeAssets>
     </PackageReference>
-    <PackageReference Include="Jellyfin.Model" Version="10.11.3">
+    <PackageReference Include="Jellyfin.Model" Version="12.0.0">
       <ExcludeAssets>runtime</ExcludeAssets>
     </PackageReference>
     <PackageReference Include="IdentityModel" Version="7.0.0" />

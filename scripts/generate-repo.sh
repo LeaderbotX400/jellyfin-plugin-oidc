@@ -6,6 +6,8 @@ REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 BUILD_DIR="$REPO_ROOT/dist"
 REPO_DIR="$REPO_ROOT/repo"
 ZIP_FILE="$BUILD_DIR/oidc-rbac.zip"
+PLUGIN_VERSION="$(sed -n 's/^version: *"\(.*\)"/\1/p' "$REPO_ROOT/build.yaml")"
+TARGET_ABI="$(sed -n 's/^targetAbi: *"\(.*\)"/\1/p' "$REPO_ROOT/build.yaml")"
 
 REPO_URL="${1:-}"
 
@@ -37,9 +39,9 @@ cat > "$REPO_DIR/manifest.json" <<EOF
     "category": "Authentication",
     "versions": [
       {
-        "version": "1.0.0.0",
-        "changelog": "Initial release: OIDC auth with PKCE, role-based library access, multi-provider, admin UI",
-        "targetAbi": "10.11.0.0",
+        "version": "$PLUGIN_VERSION",
+        "changelog": "Release $PLUGIN_VERSION",
+        "targetAbi": "$TARGET_ABI",
         "sourceUrl": "$SOURCE_URL",
         "checksum": "$CHECKSUM",
         "timestamp": "$TIMESTAMP"

@@ -146,7 +146,7 @@ jobs:
             --arg u "$DOWNLOAD_URL" \
             --arg h "$CHECKSUM" \
             --arg t "$TIMESTAMP" \
-            '{version: $v, changelog: $c, targetAbi: "10.11.0.0", sourceUrl: $u, checksum: $h, timestamp: $t}')
+            '{version: $v, changelog: $c, targetAbi: "12.0.0.0", sourceUrl: $u, checksum: $h, timestamp: $t}')
 
           # Prepend new version to existing manifest, deduping by version (re-tag overwrites)
           jq --argjson new "$NEW_ENTRY" --arg v "$VERSION" '
