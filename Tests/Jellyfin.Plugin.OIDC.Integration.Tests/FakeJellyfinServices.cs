@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Concurrent;
+using System.IO;
 using System.Collections.Generic;
 using System.Linq;
 using System.Net.Http;
@@ -8,8 +9,10 @@ using System.Threading.Tasks;
 using Jellyfin.Database.Implementations.Entities;
 using Jellyfin.Database.Implementations.Enums;
 using Jellyfin.Plugin.OIDC.Services;
+using MediaBrowser.Controller;
 using MediaBrowser.Controller.Authentication;
 using MediaBrowser.Controller.Library;
+using MediaBrowser.Controller.Providers;
 using MediaBrowser.Controller.Session;
 using MediaBrowser.Model.Activity;
 using MediaBrowser.Model.Entities;
@@ -95,6 +98,31 @@ public static class FakeJellyfinFactory
         var mock = new Mock<IActivityManager>();
         mock.Setup(m => m.CreateAsync(It.IsAny<Jellyfin.Database.Implementations.Entities.ActivityLog>()))
             .Returns(Task.CompletedTask);
+        return mock;
+    }
+
+    /// <summary>
+    /// <see cref="IProviderManager"/> whose no-BaseItem SaveImage overload really writes to disk,
+    /// so avatar tests can assert on the resulting file rather than on a mock invocation.
+    /// </summary>
+    public static Mock<IProviderManager> CreateProviderManager()
+    {
+        var mock = new Mock<IProviderManager>();
+        mock.Setup(m => m.SaveImage(It.IsAny<Stream>(), It.IsAny<string>(), It.IsAny<string>()))
+            .Returns<Stream, string, string>(async (source, _, path) =>
+            {
+                Directory.CreateDirectory(Path.GetDirectoryName(path)!);
+                await using var target = File.Create(path);
+                await source.CopyToAsync(target);
+            });
+        return mock;
+    }
+
+    /// <summary>Minimal <see cref="IServerApplicationPaths"/> exposing a temp user-configuration root.</summary>
+    public static Mock<IServerApplicationPaths> CreateApplicationPaths(string userConfigurationDirectoryPath)
+    {
+        var mock = new Mock<IServerApplicationPaths>();
+        mock.SetupGet(m => m.UserConfigurationDirectoryPath).Returns(userConfigurationDirectoryPath);
         return mock;
     }
 }

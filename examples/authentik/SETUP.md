@@ -165,6 +165,38 @@ Click **+ Add Provider** and fill in:
 > If you have issues, set the Authority URL to the external URL:
 > `http://localhost:9000/application/o/jellyfin/`
 
+#### Profile pictures and entitlements — two extra scopes
+
+Both of these are opt-in on the Authentik side and silently produce nothing if you
+skip them. Verified against Authentik 2026.8 + Jellyfin 12.0.
+
+**Profile pictures.** The `picture` claim comes from the `profile` scope, which you
+already have. What catches people out is *where Authentik serves the avatar from*: with
+the default avatar mode it is a Gravatar URL on `www.gravatar.com`, not on your Authentik
+host. The plugin only fetches avatars from the provider's Authority origin unless you say
+otherwise, so add the CDN host:
+
+- **Avatar Allowed Hosts**: `www.gravatar.com`
+
+If your Authentik uses locally-uploaded avatars instead, they are served from the
+Authentik host itself and no entry is needed. A refused fetch is logged at Warning naming
+the host, and never affects the login.
+
+**Application entitlements.** Authentik's Application Entitlements feed the plugin's
+`jellyfin:` permission tokens. They are emitted by the built-in property mapping
+*authentik default OAuth Mapping: Application Entitlements*, which is bound to the
+`entitlements` scope — so **the scope must be requested or the claim never appears**:
+
+1. Edit the provider → add *authentik default OAuth Mapping: Application Entitlements*
+   to its scopes.
+2. On the application, add an entitlement named after the token you want, e.g.
+   `jellyfin:livetv:manage`, and bind it to a user or group.
+3. In the plugin: set **Scopes** to `openid profile email entitlements`, leave
+   **Entitlement Claim** as `entitlements`, and tick *Enable entitlements*.
+
+Symptom if the scope is missing: the log reads `entitlements=0` on every login and the
+granted tokens do nothing, while role mappings keep working normally.
+
 If you created the custom `jellyfin-roles` property mapping, use instead:
 - Scopes: `openid profile email jellyfin-roles`
 - Role Claim Path: `roles`

@@ -83,6 +83,28 @@ public static class LogRedaction
     }
 
     /// <summary>
+    /// Returns "scheme://host[:port]" and drops the path, query and fragment.
+    /// Safe to log at Info — IdP-supplied URLs (notably the <c>picture</c> claim) routinely
+    /// carry a signed query string or a path-embedded token, and Google/Entra avatar URLs in
+    /// particular are capability URLs. The host is the part worth logging when diagnosing a
+    /// blocked or failed fetch; the credential-bearing remainder is not.
+    /// </summary>
+    public static string RedactUrl(string? url)
+    {
+        if (string.IsNullOrEmpty(url))
+        {
+            return "(empty)";
+        }
+
+        if (!Uri.TryCreate(url, UriKind.Absolute, out var uri))
+        {
+            return "(unparseable)";
+        }
+
+        return Sanitize($"{uri.Scheme}://{uri.Authority}");
+    }
+
+    /// <summary>
     /// When <paramref name="verboseLogging"/> is false (default), returns only the count.
     /// When true, returns the full list joined with ", ".
     /// </summary>

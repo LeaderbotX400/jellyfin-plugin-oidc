@@ -49,6 +49,13 @@ public sealed class AuthorizedSession
 
     /// <summary>Whether the id_token asserted email_verified=true.</summary>
     public bool EmailVerified { get; init; }
+
+    /// <summary>
+    /// Avatar URL from the provider's picture claim, resolved at callback time from the id_token
+    /// or the userinfo endpoint. Applied by <see cref="ProfileImageService"/> after the session
+    /// is created. Null when the provider has profile-image sync disabled or supplied no claim.
+    /// </summary>
+    public string? PictureUrl { get; init; }
 }
 
 public sealed class StateManager : IHostedService, IDisposable

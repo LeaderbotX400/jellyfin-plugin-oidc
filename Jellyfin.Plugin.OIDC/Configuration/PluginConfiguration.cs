@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.Linq;
 using System.Reflection;
+using System.Text.Json;
 using System.Text.Json.Serialization;
 using System.Text.RegularExpressions;
 using MediaBrowser.Model.Plugins;
@@ -26,95 +27,41 @@ public static class ConfigMasking
     /// Returns a deep copy of <paramref name="config"/> with all
     /// <see cref="SecretAttribute"/>-annotated string properties replaced by
     /// <see cref="Sentinel"/> (only when the value is non-empty).
+    ///
+    /// The clone is produced by a JSON round-trip rather than a hand-written
+    /// member-by-member copy. The hand-written version silently dropped every
+    /// property nobody remembered to add to it — EmailClaim, AutoLinkByVerifiedEmail,
+    /// EnforceSsoOnLink, AllowInsecureAuthority and AllowedSigningAlgorithms were all
+    /// being returned to the admin UI as type defaults rather than their saved values.
+    /// A round-trip cannot drift as the config grows.
     /// </summary>
     public static PluginConfiguration Mask(PluginConfiguration config)
     {
-        var masked = new PluginConfiguration
+        var json = JsonSerializer.Serialize(config, CloneOptions);
+        var masked = JsonSerializer.Deserialize<PluginConfiguration>(json, CloneOptions)
+                     ?? throw new InvalidOperationException("Failed to clone plugin configuration for masking");
+
+        MaskSecretProperties(masked);
+        foreach (var provider in masked.Providers)
         {
-            DefaultProvider = config.DefaultProvider,
-            AutoCreateUsers = config.AutoCreateUsers,
-            DefaultRoleName = config.DefaultRoleName,
-            VerboseClaimLogging = config.VerboseClaimLogging,
-            TrustForwardedHeaders = config.TrustForwardedHeaders,
-            TrustedProxyCidrs = new List<string>(config.TrustedProxyCidrs),
-            RoleMappings = config.RoleMappings.Select(m => new RoleMapping
-            {
-                RoleName = m.RoleName,
-                ProviderId = m.ProviderId,
-                IsExplicitDeny = m.IsExplicitDeny,
-                IsAdmin = m.IsAdmin,
-                EnableAllLibraries = m.EnableAllLibraries,
-                LibraryIds = new List<string>(m.LibraryIds),
-                LibraryNames = new List<string>(m.LibraryNames),
-                EnableLiveTv = m.EnableLiveTv,
-                EnableLiveTvManagement = m.EnableLiveTvManagement,
-                EnableMediaPlayback = m.EnableMediaPlayback,
-                EnableRemoteAccess = m.EnableRemoteAccess,
-                EnableTranscoding = m.EnableTranscoding,
-                EnableContentDeletion = m.EnableContentDeletion,
-                EnableCollectionManagement = m.EnableCollectionManagement,
-                EnableSubtitleManagement = m.EnableSubtitleManagement,
-                EnableDownload = m.EnableDownload,
-                EnableSyncplay = m.EnableSyncplay,
-                EnableSyncplayGroupCreation = m.EnableSyncplayGroupCreation,
-                IsHidden = m.IsHidden,
-                EnablePlaybackRemuxing = m.EnablePlaybackRemuxing,
-                EnableRemoteControlOfOtherUsers = m.EnableRemoteControlOfOtherUsers,
-                EnableSharedDeviceControl = m.EnableSharedDeviceControl,
-                MaxActiveSessions = m.MaxActiveSessions,
-                MaxParentalRating = m.MaxParentalRating,
-                Priority = m.Priority
-            }).ToList(),
-            SamlProviders = config.SamlProviders.Select(s => new SamlProviderConfig
-            {
-                Id = s.Id,
-                DisplayName = s.DisplayName,
-                EntityId = s.EntityId,
-                IdpEntityId = s.IdpEntityId,
-                SsoUrl = s.SsoUrl,
-                IdpCertificate = s.IdpCertificate,
-                UsernameClaim = s.UsernameClaim,
-                RoleClaim = s.RoleClaim,
-                Enabled = s.Enabled,
-                ButtonColor = s.ButtonColor,
-                AllowIdpInitiated = s.AllowIdpInitiated
-            }).ToList(),
-            Providers = config.Providers.Select(p =>
-            {
-                var copy = new OidcProviderConfig
-                {
-                    ProviderId = p.ProviderId,
-                    DisplayName = p.DisplayName,
-                    Authority = p.Authority,
-                    ClientId = p.ClientId,
-                    ClientSecret = p.ClientSecret,
-                    Scopes = p.Scopes,
-                    RoleClaim = p.RoleClaim,
-                    UsernameClaim = p.UsernameClaim,
-                    DisplayNameClaim = p.DisplayNameClaim,
-                    Enabled = p.Enabled,
-                    ButtonColor = p.ButtonColor,
-                    ButtonIcon = p.ButtonIcon,
-                    AdditionalParameters = p.AdditionalParameters,
-                    EntitlementClaim = p.EntitlementClaim,
-                    EntitlementPrefix = p.EntitlementPrefix,
-                    EnableEntitlements = p.EnableEntitlements,
-                    RequireEmailVerified = p.RequireEmailVerified,
-                    RoleTransforms = p.RoleTransforms.Select(t => new ClaimTransform
-                    {
-                        FromValue = t.FromValue,
-                        ToValue = t.ToValue
-                    }).ToList(),
-                    RequiredAmrValues = new List<string>(p.RequiredAmrValues),
-                    RequiredAcrValues = new List<string>(p.RequiredAcrValues),
-                    RolesFromAccessToken = p.RolesFromAccessToken
-                };
-                MaskSecretProperties(copy);
-                return copy;
-            }).ToList()
-        };
+            MaskSecretProperties(provider);
+        }
+
+        foreach (var saml in masked.SamlProviders)
+        {
+            MaskSecretProperties(saml);
+        }
+
         return masked;
     }
+
+    private static readonly JsonSerializerOptions CloneOptions = new()
+    {
+        // Match the property casing the plugin's own API surface uses so the round-trip
+        // is lossless regardless of how the config was originally deserialized.
+        PropertyNameCaseInsensitive = true
+    };
+
 
     /// <summary>
     /// Merges incoming (possibly sentinel-containing) values from
@@ -341,6 +288,28 @@ public class OidcProviderConfig
 
     /// <summary>OIDC claim name carrying the user's email address. Used by AutoLinkByVerifiedEmail.</summary>
     public string EmailClaim { get; set; } = "email";
+
+    /// <summary>OIDC claim name carrying the URL of the user's avatar. Used by <see cref="SyncProfileImage"/>.</summary>
+    public string PictureClaim { get; set; } = "picture";
+
+    /// <summary>
+    /// When true (default), the Jellyfin profile image is synced from the <see cref="PictureClaim"/>
+    /// URL on login, overwriting any avatar set in Jellyfin. The image is only re-downloaded when the
+    /// claim URL changes. A failure never fails the login — it is logged and skipped.
+    /// </summary>
+    public bool SyncProfileImage { get; set; } = true;
+
+    /// <summary>
+    /// Extra hostnames the avatar fetcher may contact, beyond the provider's own <see cref="Authority"/>
+    /// origin (which is always allowed). Needed for IdPs that serve avatars off a separate CDN —
+    /// e.g. <c>lh3.googleusercontent.com</c> for Google, <c>graph.microsoft.com</c> for Entra ID.
+    ///
+    /// This is a security control, not a convenience: the picture claim is an IdP-supplied URL that the
+    /// SERVER fetches, and on IdPs where end users can edit their own profile (Keycloak, Authentik) it is
+    /// effectively user-controlled. Anything not on this list or the Authority origin is refused. Entries
+    /// are bare hostnames — no scheme, port, path, or wildcard.
+    /// </summary>
+    public List<string> PictureAllowedHosts { get; set; } = new();
 
     /// <summary>
     /// Algorithms (JWS "alg" header values) accepted when validating ID tokens / logout tokens from this provider.

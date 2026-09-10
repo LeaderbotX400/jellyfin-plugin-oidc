@@ -44,6 +44,7 @@ public sealed class MockIdpFixture : IAsyncLifetime
             authorization_endpoint = $"{Server.Url}/authorize",
             token_endpoint = $"{Server.Url}/token",
             jwks_uri = $"{Server.Url}/jwks",
+            userinfo_endpoint = $"{Server.Url}/userinfo",
             response_types_supported = new[] { "code", "id_token", "token id_token" },
             subject_types_supported = new[] { "public" },
             id_token_signing_alg_values_supported = new[] { "RS256" },
@@ -93,7 +94,8 @@ public sealed class MockIdpFixture : IAsyncLifetime
         string? nonce = null,
         bool useHmacSigning = false,
         IEnumerable<string>? amr = null,
-        string? acr = null)
+        string? acr = null,
+        string? picture = null)
     {
         var claims = new List<Claim>
         {
@@ -121,6 +123,7 @@ public sealed class MockIdpFixture : IAsyncLifetime
         }
 
         if (acr != null) claims.Add(new Claim("acr", acr));
+        if (picture != null) claims.Add(new Claim("picture", picture));
 
         var creds = useHmacSigning
             ? new SigningCredentials(new SymmetricSecurityKey(Encoding.UTF8.GetBytes(ClientSecret)), SecurityAlgorithms.HmacSha256)
@@ -260,6 +263,37 @@ public sealed class MockIdpFixture : IAsyncLifetime
     /// Key to sign the access token. Pass <see langword="null"/> to use the IdP's
     /// canonical key (valid). Pass a different RSA key to simulate a wrong-key scenario.
     /// </param>
+    /// <summary>
+    /// Stubs an avatar endpoint on the IdP's own origin and returns its URL, for use as a
+    /// <c>picture</c> claim value. The bytes are a minimal but real PNG header so the service's
+    /// magic-byte check sees a genuine PNG.
+    /// </summary>
+    public string StubAvatarEndpoint(string path = "/avatar.png", string mediaType = "image/png", byte[]? body = null)
+    {
+        body ??= new byte[]
+        {
+            0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A, 0x00, 0x00, 0x00, 0x0D, 0x49, 0x48, 0x44, 0x52
+        };
+
+        Server.Given(Request.Create().WithPath(path).UsingGet())
+              .RespondWith(Response.Create()
+                  .WithStatusCode(200)
+                  .WithHeader("Content-Type", mediaType)
+                  .WithBody(body));
+
+        return Authority.TrimEnd('/') + path;
+    }
+
+    /// <summary>Stubs the userinfo endpoint, for IdPs (e.g. Authentik) that expose picture only there.</summary>
+    public void StubUserInfo(object claims)
+    {
+        Server.Given(Request.Create().WithPath("/userinfo").UsingGet())
+              .RespondWith(Response.Create()
+                  .WithStatusCode(200)
+                  .WithHeader("Content-Type", "application/json")
+                  .WithBody(JsonSerializer.Serialize(claims)));
+    }
+
     public void EnqueueTokenResponseWithAccessTokenRoles(
         string sub,
         string username,

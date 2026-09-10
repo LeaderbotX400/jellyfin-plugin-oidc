@@ -1,5 +1,7 @@
 using System;
 using System.IO;
+using System.Net;
+using System.Net.Http;
 using System.Threading.Tasks;
 using System.Web;
 using Jellyfin.Plugin.OIDC.Api;
@@ -31,6 +33,11 @@ internal sealed class TestFixture
     public AuthorizationCodeCache CodeCache { get; }
     public CallbackRateLimiter RateLimiter { get; }
     public Mock<IActivityManager> ActivityManagerMock { get; }
+    public ProfileImageService ProfileImageService { get; }
+    public Mock<MediaBrowser.Controller.Providers.IProviderManager> ProviderManagerMock { get; }
+
+    /// <summary>Temp stand-in for IServerApplicationPaths.UserConfigurationDirectoryPath; avatars land under it.</summary>
+    public string UserConfigurationDirectory { get; }
 
     public TestFixture(MockIdpFixture idp)
     {
@@ -66,6 +73,25 @@ internal sealed class TestFixture
             ConfigProvider,
             NullLogger<UserSyncService>.Instance);
 
+        UserConfigurationDirectory = Path.Combine(Path.GetTempPath(), $"oidc-test-userconfig-{Guid.NewGuid():N}");
+        Directory.CreateDirectory(UserConfigurationDirectory);
+        ProviderManagerMock = FakeJellyfinFactory.CreateProviderManager();
+
+        // Avatar hosts in these tests are loopback WireMock endpoints, which the SSRF guard is
+        // supposed to reject — that is the point of the guard. The stub resolver hands back a
+        // public address so the guard passes, and the stub client factory ignores the pinned
+        // address and dials the real loopback URL. Guard behaviour itself is covered directly in
+        // the ProfileImageServiceTests unit tests, which exercise the real resolver logic.
+        ProfileImageService = new ProfileImageService(
+            _ => new HttpClient(new HttpClientHandler { AllowAutoRedirect = false }),
+            userManagerMock.Object,
+            FakeJellyfinFactory.CreateApplicationPaths(UserConfigurationDirectory).Object,
+            ProviderManagerMock.Object,
+            OidcUserStore,
+            ConfigProvider,
+            NullLogger<ProfileImageService>.Instance,
+            dnsResolver: (_, _) => Task.FromResult(new[] { IPAddress.Parse("203.0.113.10") }));
+
         Controller = new OidcController(
             StateManager,
             userSyncService,
@@ -79,6 +105,7 @@ internal sealed class TestFixture
             ConfigProvider,
             CodeCache,
             RateLimiter,
+            ProfileImageService,
             NullLogger<OidcController>.Instance);
 
         Controller.ControllerContext = new ControllerContext

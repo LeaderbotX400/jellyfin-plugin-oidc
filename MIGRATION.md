@@ -1,5 +1,26 @@
 # Migration Notes
 
+## v0.2.1 — Profile pictures from the `picture` claim
+
+The Jellyfin avatar is now synced from the OIDC `picture` claim, and this is **on by
+default** for every provider. On the first login after upgrading, a user whose IdP
+publishes a `picture` claim will have their Jellyfin avatar replaced by the IdP's.
+
+**If your users manage their own Jellyfin avatars, turn this off before upgrading**
+— uncheck *Sync profile picture* on each provider (`SyncProfileImage: false`).
+
+Two things may need configuration:
+
+- **Avatar Allowed Hosts.** The server will only fetch avatars from the provider's
+  Authority origin unless you list additional hosts. Google (`lh3.googleusercontent.com`)
+  and Entra ID (`graph.microsoft.com`) serve avatars off a separate host and will be
+  refused — with a Warning in the log naming the host — until you add them. Self-hosted
+  Authentik and Keycloak serve avatars from their own origin and need nothing.
+- **Scopes.** The `picture` claim usually requires the `profile` scope, which is in the
+  default scope list already.
+
+A failed or refused avatar fetch never affects the login itself.
+
 ## v0.2.0 — Jellyfin 12
 
 ### What changed

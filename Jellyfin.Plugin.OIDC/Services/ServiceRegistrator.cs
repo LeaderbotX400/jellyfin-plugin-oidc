@@ -1,3 +1,6 @@
+using System;
+using System.Net;
+using System.Net.Http;
 using Jellyfin.Plugin.OIDC.Auth;
 using MediaBrowser.Controller;
 using MediaBrowser.Controller.Authentication;
@@ -36,6 +39,14 @@ public class ServiceRegistrator : IPluginServiceRegistrator
         serviceCollection.AddSingleton<OidcDiscoveryCache>();
         serviceCollection.AddScoped<RbacService>();
         serviceCollection.AddScoped<UserSyncService>();
+
+        // The avatar fetcher builds its own HttpClient per request, pinned to the IP address the
+        // SSRF guard just validated (see ProfileImageService.CreatePinnedClient). It deliberately
+        // does not use IHttpClientFactory: a pooled client would reuse connections and re-resolve
+        // DNS, which is exactly the TOCTOU the pinning exists to close. The factory is injected as
+        // a delegate so tests can substitute a stub client.
+        serviceCollection.AddSingleton<Func<IPAddress, HttpClient>>(_ => ProfileImageService.CreatePinnedClient);
+        serviceCollection.AddScoped<ProfileImageService>();
         serviceCollection.AddTransient<IScheduledTask, RbacResyncTask>();
     }
 }

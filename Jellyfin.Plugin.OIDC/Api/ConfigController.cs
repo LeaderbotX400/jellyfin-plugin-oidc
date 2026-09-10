@@ -64,7 +64,22 @@ public class ConfigController : ControllerBase
         {
             p.Authority = SecurityValidation.NormalizeAuthority(p.Authority);
         }
-        _configProvider.SaveConfiguration(incoming);
+
+        try
+        {
+            _configProvider.SaveConfiguration(incoming);
+        }
+        catch (Exception ex) when (ex is InvalidOperationException or ArgumentException)
+        {
+            // OidcPlugin.UpdateConfiguration validates before persisting and throws with a
+            // message written for the admin ("PictureAllowedHosts entry 'x' is not a bare
+            // hostname", "signing algorithm 'foo' is unknown", …). Letting it escape produced
+            // a bare 500 "Error processing request", so the admin saw that the save failed but
+            // never why. Surface it as a 400 with the reason instead.
+            _logger.LogWarning("Rejected plugin configuration save: {Message}", ex.Message);
+            return BadRequest(new { error = "invalid_configuration", message = ex.Message });
+        }
+
         return NoContent();
     }
 

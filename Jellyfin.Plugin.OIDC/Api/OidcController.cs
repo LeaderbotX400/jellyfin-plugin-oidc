@@ -42,6 +42,7 @@ public class OidcController : ControllerBase
     private readonly IPluginConfigProvider _configProvider;
     private readonly AuthorizationCodeCache _codeCache;
     private readonly CallbackRateLimiter _rateLimiter;
+    private readonly ProfileImageService _profileImageService;
     private readonly ILogger<OidcController> _logger;
 
     public OidcController(
@@ -57,6 +58,7 @@ public class OidcController : ControllerBase
         IPluginConfigProvider configProvider,
         AuthorizationCodeCache codeCache,
         CallbackRateLimiter rateLimiter,
+        ProfileImageService profileImageService,
         ILogger<OidcController> logger)
     {
         _stateManager = stateManager;
@@ -71,6 +73,7 @@ public class OidcController : ControllerBase
         _configProvider = configProvider;
         _codeCache = codeCache;
         _rateLimiter = rateLimiter;
+        _profileImageService = profileImageService;
         _logger = logger;
     }
 
@@ -359,6 +362,10 @@ public class OidcController : ControllerBase
 
         var displayName = ClaimParser.ExtractClaim(idToken, provider.DisplayNameClaim);
 
+        var pictureUrl = provider.SyncProfileImage
+            ? await ResolvePictureUrlAsync(provider, disco, idToken, tokenResponse.AccessToken).ConfigureAwait(false)
+            : null;
+
         // Extract roles; optionally fall back to a fully-validated access token.
         // The flag is off by default: access tokens are resource-server tokens and
         // their audience/signing may differ from the id_token, so reading them
@@ -469,12 +476,76 @@ public class OidcController : ControllerBase
             Entitlements = entitlements,
             LinkUserId = oidcState.LinkingForUserId,
             Email = emailClaim,
-            EmailVerified = emailVerified
+            EmailVerified = emailVerified,
+            PictureUrl = pictureUrl
         });
 
         _rateLimiter.RecordSuccess(remoteIp);
         SetCallbackSecurityHeaders();
         return Content(BuildCallbackHtml(sessionToken, providerId), "text/html");
+    }
+
+    /// <summary>
+    /// Resolves the avatar URL for this login: the id_token's picture claim if present, otherwise
+    /// the userinfo endpoint.
+    ///
+    /// The userinfo fallback is not optional in practice — Authentik, the IdP this repo ships an
+    /// example for, exposes <c>picture</c> only from userinfo and never in the id_token. The
+    /// endpoint comes from the cached discovery document and has already been pinned to the
+    /// authority's origin by <see cref="OidcDiscoveryCache"/>, so this adds no new egress target.
+    ///
+    /// Returns null on any failure. An avatar is never worth failing a login over.
+    /// </summary>
+    private async Task<string?> ResolvePictureUrlAsync(
+        OidcProviderConfig provider,
+        DiscoveryDocumentResponse disco,
+        JwtSecurityToken idToken,
+        string? accessToken)
+    {
+        var fromIdToken = ClaimParser.ExtractClaim(idToken, provider.PictureClaim);
+        if (!string.IsNullOrWhiteSpace(fromIdToken))
+        {
+            return fromIdToken;
+        }
+
+        if (string.IsNullOrEmpty(accessToken) || string.IsNullOrEmpty(disco.UserInfoEndpoint))
+        {
+            return null;
+        }
+
+        try
+        {
+            var httpClient = _httpClientFactory.CreateClient("OidcPlugin");
+            var userInfo = await httpClient.GetUserInfoAsync(new UserInfoRequest
+            {
+                Address = disco.UserInfoEndpoint,
+                Token = accessToken
+            }).ConfigureAwait(false);
+
+            if (userInfo.IsError)
+            {
+                _logger.LogDebug(
+                    "Userinfo lookup for picture claim failed for provider {Provider}: {Error}",
+                    provider.ProviderId,
+                    LogRedaction.Sanitize(userInfo.Error));
+                return null;
+            }
+
+            foreach (var claim in userInfo.Claims)
+            {
+                if (string.Equals(claim.Type, provider.PictureClaim, StringComparison.Ordinal))
+                {
+                    return claim.Value;
+                }
+            }
+
+            return null;
+        }
+        catch (Exception ex) when (ex is HttpRequestException or TaskCanceledException or InvalidOperationException)
+        {
+            _logger.LogDebug(ex, "Userinfo lookup for picture claim failed for provider {Provider}", provider.ProviderId);
+            return null;
+        }
     }
 
     [HttpPost("Auth/{providerId}")]
@@ -526,6 +597,13 @@ public class OidcController : ControllerBase
             };
 
             var authResult = await _sessionManager.AuthenticateDirect(authRequest).ConfigureAwait(false);
+
+            // After the session exists, so an avatar host that is slow or hostile cannot delay or
+            // prevent the login itself. ApplyAsync never throws; its own 5s timeout bounds the
+            // extra latency, and it makes no network call at all when the URL has not changed.
+            await _profileImageService
+                .ApplyAsync(userId, session.PictureUrl, providerId, HttpContext.RequestAborted)
+                .ConfigureAwait(false);
 
             if (!string.IsNullOrEmpty(session.Sid))
             {
@@ -962,7 +1040,28 @@ public class OidcController : ControllerBase
             const token = {{encodedToken}};
             const providerId = {{encodedProvider}};
 
-            const deviceId = localStorage.getItem('_deviceId2') || crypto.randomUUID();
+            // crypto.randomUUID() is secure-context only. A Jellyfin served over plain HTTP at a
+            // non-localhost address — a LAN install on http://10.0.0.5:8096, say — has no secure
+            // context, randomUUID is undefined, and this line used to throw and strand the login
+            // on "Completing authentication...". crypto.getRandomValues has no such restriction.
+            function newDeviceId() {
+                if (crypto && typeof crypto.randomUUID === 'function') {
+                    return crypto.randomUUID();
+                }
+                if (crypto && typeof crypto.getRandomValues === 'function') {
+                    const b = new Uint8Array(16);
+                    crypto.getRandomValues(b);
+                    b[6] = (b[6] & 0x0f) | 0x40;  // version 4
+                    b[8] = (b[8] & 0x3f) | 0x80;  // variant 10x
+                    const h = Array.from(b, x => x.toString(16).padStart(2, '0')).join('');
+                    return h.slice(0, 8) + '-' + h.slice(8, 12) + '-' + h.slice(12, 16) + '-' +
+                           h.slice(16, 20) + '-' + h.slice(20);
+                }
+                // Last resort: this is a device label for the session list, not a secret.
+                return 'oidc-' + Date.now().toString(16) + '-' + Math.random().toString(16).slice(2, 10);
+            }
+
+            const deviceId = localStorage.getItem('_deviceId2') || newDeviceId();
             localStorage.setItem('_deviceId2', deviceId);
 
             fetch('/sso/OIDC/Auth/' + encodeURIComponent(providerId), {
