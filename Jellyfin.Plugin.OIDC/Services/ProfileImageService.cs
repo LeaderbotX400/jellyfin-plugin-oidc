@@ -181,7 +181,10 @@ public sealed class ProfileImageService
             return;
         }
 
-        if (!IsHostAllowed(uri, provider))
+        // The origin check is the primary control. Which of the two ways it passed then decides
+        // whether the address blocklist applies (see below).
+        var onAuthorityOrigin = IsAuthorityOrigin(uri, provider);
+        if (!onAuthorityOrigin && !IsAllowlistedHost(uri, provider))
         {
             _logger.LogWarning(
                 "Profile image sync refused: {Source} is not the provider's authority origin and is not in PictureAllowedHosts " +
@@ -191,8 +194,16 @@ public sealed class ProfileImageService
             return;
         }
 
+        // The provider's own Authority is exempt from the private-address blocklist. It is
+        // admin-configured, we already send it the client secret and accept its identity
+        // assertions, and self-hosted Authentik/Keycloak very commonly live on the LAN — blocking
+        // it would mean no avatars for most self-hosted deployments in exchange for nothing:
+        // an attacker who can point the Authority hostname at internal infrastructure already
+        // controls the entire authentication flow. Hosts on PictureAllowedHosts get the full
+        // check, since those exist for public CDNs. Either way the connection is still pinned to
+        // the resolved address.
         var pinnedAddress = await SecurityValidation
-            .ResolveAndValidateAsync(uri, _dnsResolver, cancellationToken)
+            .ResolveAndValidateAsync(uri, _dnsResolver, cancellationToken, allowPrivateAddresses: onAuthorityOrigin)
             .ConfigureAwait(false);
 
         using var client = _pinnedClientFactory(pinnedAddress);
@@ -364,11 +375,11 @@ public sealed class ProfileImageService
     }
 
     /// <summary>
-    /// True when the URL's origin is the provider's own authority, or its host is on the admin's
-    /// allowlist. Authority-origin comparison is delegated to <see cref="SecurityValidation.EnsureSameHost"/>
-    /// so avatars follow the same scheme+host+port rule as discovered OIDC endpoints.
+    /// True when the URL is on the provider's own Authority origin. Delegated to
+    /// <see cref="SecurityValidation.EnsureSameHost"/> so avatars follow the same scheme+host+port
+    /// rule as discovered OIDC endpoints.
     /// </summary>
-    private static bool IsHostAllowed(Uri uri, OidcProviderConfig provider)
+    private static bool IsAuthorityOrigin(Uri uri, OidcProviderConfig provider)
     {
         try
         {
@@ -378,9 +389,13 @@ public sealed class ProfileImageService
         }
         catch (InvalidOperationException)
         {
-            // Not the authority origin — fall through to the explicit allowlist.
+            return false;
         }
+    }
 
+    /// <summary>True when the URL's host appears on the admin's extra-hosts allowlist.</summary>
+    private static bool IsAllowlistedHost(Uri uri, OidcProviderConfig provider)
+    {
         foreach (var host in provider.PictureAllowedHosts)
         {
             if (!string.IsNullOrWhiteSpace(host)

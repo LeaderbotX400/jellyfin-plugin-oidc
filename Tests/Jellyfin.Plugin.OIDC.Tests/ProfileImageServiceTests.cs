@@ -216,6 +216,11 @@ public sealed class ProfileImageServiceTests : IDisposable
         Assert.NotNull(_user.ProfileImage);
     }
 
+    private const string AllowlistedAvatarUrl = "https://lh3.googleusercontent.com/a/abc123";
+
+    /// <summary>Puts the CDN host on the allowlist so these cases test the address check, not the origin check.</summary>
+    private void AllowlistCdn() => Provider.PictureAllowedHosts.Add("lh3.googleusercontent.com");
+
     [Theory]
     [InlineData("127.0.0.1")]        // loopback
     [InlineData("10.0.0.1")]         // RFC1918
@@ -224,12 +229,13 @@ public sealed class ProfileImageServiceTests : IDisposable
     [InlineData("100.64.0.1")]       // carrier NAT
     [InlineData("::1")]              // IPv6 loopback
     [InlineData("fd00::1")]          // IPv6 unique local
-    public async Task UrlResolvingToPrivateAddress_IsRefused(string address)
+    public async Task AllowlistedHostResolvingToPrivateAddress_IsRefused(string address)
     {
+        AllowlistCdn();
         _resolver = (_, _) => Task.FromResult(new[] { IPAddress.Parse(address) });
         RespondWith(PngBytes);
 
-        await ApplyAsync();
+        await ApplyAsync(AllowlistedAvatarUrl);
 
         Assert.Equal(0, _clientsCreated);
         Assert.Null(_user.ProfileImage);
@@ -241,12 +247,13 @@ public sealed class ProfileImageServiceTests : IDisposable
     /// as a user's avatar, whatever credentials the metadata service returns.
     /// </summary>
     [Fact]
-    public async Task UrlResolvingToCloudMetadataEndpoint_IsRefused()
+    public async Task AllowlistedHostResolvingToCloudMetadataEndpoint_IsRefused()
     {
+        AllowlistCdn();
         _resolver = (_, _) => Task.FromResult(new[] { IPAddress.Parse("169.254.169.254") });
         RespondWith(PngBytes);
 
-        await ApplyAsync();
+        await ApplyAsync(AllowlistedAvatarUrl);
 
         Assert.Equal(0, _clientsCreated);
         Assert.Null(_user.ProfileImage);
@@ -257,15 +264,53 @@ public sealed class ProfileImageServiceTests : IDisposable
     /// dual-homed service. Any blocked address in the answer must reject the whole fetch.
     /// </summary>
     [Fact]
-    public async Task UrlResolvingToMixedPublicAndPrivateAddresses_IsRefused()
+    public async Task AllowlistedHostResolvingToMixedAddresses_IsRefused()
     {
+        AllowlistCdn();
         _resolver = (_, _) => Task.FromResult(new[]
         {
             IPAddress.Parse("203.0.113.10"), IPAddress.Parse("169.254.169.254")
         });
         RespondWith(PngBytes);
 
-        await ApplyAsync();
+        await ApplyAsync(AllowlistedAvatarUrl);
+
+        Assert.Equal(0, _clientsCreated);
+        Assert.Null(_user.ProfileImage);
+    }
+
+    /// <summary>
+    /// Self-hosted Authentik/Keycloak on the LAN is the common Jellyfin deployment. The Authority
+    /// is admin-configured and already trusted with the client secret and the identity assertions
+    /// themselves, so it is exempt from the private-address blocklist — otherwise most self-hosted
+    /// installs would silently get no avatars.
+    /// </summary>
+    [Theory]
+    [InlineData("10.0.0.5")]
+    [InlineData("192.168.1.20")]
+    [InlineData("172.20.0.7")]
+    [InlineData("fd00::5")]
+    public async Task AuthorityOriginOnAPrivateAddress_IsAllowed(string address)
+    {
+        _resolver = (_, _) => Task.FromResult(new[] { IPAddress.Parse(address) });
+        RespondWith(PngBytes);
+        await SeedUserRecordAsync();
+
+        await ApplyAsync(); // AvatarUrl is on the Authority origin
+
+        Assert.Equal(1, _clientsCreated);
+        Assert.NotNull(_user.ProfileImage);
+    }
+
+    /// <summary>The exemption is scoped to the Authority origin, not inherited by allowlisted hosts.</summary>
+    [Fact]
+    public async Task ExemptionDoesNotLeakToAllowlistedHosts()
+    {
+        AllowlistCdn();
+        _resolver = (_, _) => Task.FromResult(new[] { IPAddress.Parse("10.0.0.5") });
+        RespondWith(PngBytes);
+
+        await ApplyAsync(AllowlistedAvatarUrl);
 
         Assert.Equal(0, _clientsCreated);
         Assert.Null(_user.ProfileImage);
@@ -638,6 +683,19 @@ public sealed class SecurityValidationAddressTests
         await Assert.ThrowsAsync<InvalidOperationException>(() =>
             SecurityValidation.ResolveAndValidateAsync(
                 new Uri("https://cdn.example.com/a.png"), (_, _) => Task.FromResult(Array.Empty<IPAddress>())));
+    }
+
+    [Fact]
+    public async Task ResolveAndValidateAsync_AllowPrivateAddresses_SkipsTheBlocklist()
+    {
+        // Used for the provider Authority origin, which is admin-configured and often on the LAN.
+        var expected = IPAddress.Parse("10.0.0.5");
+        var actual = await SecurityValidation.ResolveAndValidateAsync(
+            new Uri("https://auth.home.lan/avatar.png"),
+            (_, _) => Task.FromResult(new[] { expected }),
+            allowPrivateAddresses: true);
+
+        Assert.Equal(expected, actual);
     }
 
     [Fact]

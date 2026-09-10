@@ -164,10 +164,20 @@ public static class SecurityValidation
     /// <param name="uri">The URL whose host should be resolved.</param>
     /// <param name="resolver">Injectable DNS lookup; defaults to <see cref="Dns.GetHostAddressesAsync(string, CancellationToken)"/>.</param>
     /// <param name="cancellationToken">Cancellation token.</param>
+    /// <param name="allowPrivateAddresses">
+    /// Skips the address blocklist while still resolving and returning an address to pin to.
+    /// Set this only for a host the ADMIN configured and the server already trusts — in practice
+    /// the provider's own Authority origin, which is very often on the LAN in a self-hosted
+    /// Authentik or Keycloak deployment. Refusing to load an image from the same host we send the
+    /// client secret to and accept identity assertions from would be incoherent, and blocking it
+    /// would break avatars for most self-hosted setups. Never set it for a host that merely
+    /// appeared in an IdP-supplied URL.
+    /// </param>
     public static async Task<IPAddress> ResolveAndValidateAsync(
         Uri uri,
         Func<string, CancellationToken, Task<IPAddress[]>>? resolver = null,
-        CancellationToken cancellationToken = default)
+        CancellationToken cancellationToken = default,
+        bool allowPrivateAddresses = false)
     {
         ArgumentNullException.ThrowIfNull(uri);
 
@@ -188,13 +198,16 @@ public static class SecurityValidation
             throw new InvalidOperationException($"Host '{uri.Host}' resolved to no addresses");
         }
 
-        foreach (var address in addresses)
+        if (!allowPrivateAddresses)
         {
-            if (IsBlockedAddress(address))
+            foreach (var address in addresses)
             {
-                throw new InvalidOperationException(
-                    $"Host '{uri.Host}' resolves to a non-public address ({address}); refusing to fetch. " +
-                    "This is an SSRF guard — the URL came from the identity provider, not from an administrator.");
+                if (IsBlockedAddress(address))
+                {
+                    throw new InvalidOperationException(
+                        $"Host '{uri.Host}' resolves to a non-public address ({address}); refusing to fetch. " +
+                        "This is an SSRF guard — the URL came from the identity provider, not from an administrator.");
+                }
             }
         }
 

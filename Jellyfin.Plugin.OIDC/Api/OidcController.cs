@@ -1040,7 +1040,28 @@ public class OidcController : ControllerBase
             const token = {{encodedToken}};
             const providerId = {{encodedProvider}};
 
-            const deviceId = localStorage.getItem('_deviceId2') || crypto.randomUUID();
+            // crypto.randomUUID() is secure-context only. A Jellyfin served over plain HTTP at a
+            // non-localhost address — a LAN install on http://10.0.0.5:8096, say — has no secure
+            // context, randomUUID is undefined, and this line used to throw and strand the login
+            // on "Completing authentication...". crypto.getRandomValues has no such restriction.
+            function newDeviceId() {
+                if (crypto && typeof crypto.randomUUID === 'function') {
+                    return crypto.randomUUID();
+                }
+                if (crypto && typeof crypto.getRandomValues === 'function') {
+                    const b = new Uint8Array(16);
+                    crypto.getRandomValues(b);
+                    b[6] = (b[6] & 0x0f) | 0x40;  // version 4
+                    b[8] = (b[8] & 0x3f) | 0x80;  // variant 10x
+                    const h = Array.from(b, x => x.toString(16).padStart(2, '0')).join('');
+                    return h.slice(0, 8) + '-' + h.slice(8, 12) + '-' + h.slice(12, 16) + '-' +
+                           h.slice(16, 20) + '-' + h.slice(20);
+                }
+                // Last resort: this is a device label for the session list, not a secret.
+                return 'oidc-' + Date.now().toString(16) + '-' + Math.random().toString(16).slice(2, 10);
+            }
+
+            const deviceId = localStorage.getItem('_deviceId2') || newDeviceId();
             localStorage.setItem('_deviceId2', deviceId);
 
             fetch('/sso/OIDC/Auth/' + encodeURIComponent(providerId), {
