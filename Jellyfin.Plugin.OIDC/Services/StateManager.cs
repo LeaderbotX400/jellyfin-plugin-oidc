@@ -22,6 +22,13 @@ public sealed class OidcState
     public Guid? LinkingForUserId { get; init; }
 
     /// <summary>
+    /// True when this flow was started from the Quick Connect bridge, so the callback should render
+    /// the code-entry page rather than hand the browser a web session. Deliberately a bare flag and
+    /// not a return URL — carrying a URL through the round trip would be an open-redirect surface.
+    /// </summary>
+    public bool QuickConnect { get; init; }
+
+    /// <summary>
     /// SHA-256 hash of the per-request CSRF token issued at /Start as a cookie. The /Callback
     /// handler re-reads the cookie and verifies SHA-256(cookie) == CsrfBindingHash using a
     /// fixed-time comparison. Null only when the state was constructed by flows that don't

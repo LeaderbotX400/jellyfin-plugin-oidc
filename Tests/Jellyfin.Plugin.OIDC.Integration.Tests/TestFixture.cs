@@ -39,6 +39,11 @@ internal sealed class TestFixture
     /// <summary>Temp stand-in for IServerApplicationPaths.UserConfigurationDirectoryPath; avatars land under it.</summary>
     public string UserConfigurationDirectory { get; }
 
+    /// <summary>Fake Quick Connect so bridge tests can assert on AuthorizeRequest without a real server.</summary>
+    public Mock<MediaBrowser.Controller.QuickConnect.IQuickConnect> QuickConnectMock { get; } = new();
+
+    public QuickConnectAttemptLimiter QuickConnectAttemptLimiter { get; } = new(NullLogger<QuickConnectAttemptLimiter>.Instance);
+
     public TestFixture(MockIdpFixture idp)
     {
         Idp = idp;
@@ -76,6 +81,8 @@ internal sealed class TestFixture
         UserConfigurationDirectory = Path.Combine(Path.GetTempPath(), $"oidc-test-userconfig-{Guid.NewGuid():N}");
         Directory.CreateDirectory(UserConfigurationDirectory);
         ProviderManagerMock = FakeJellyfinFactory.CreateProviderManager();
+        QuickConnectMock.SetupGet(q => q.IsEnabled).Returns(true);
+        QuickConnectMock.Setup(q => q.AuthorizeRequest(It.IsAny<Guid>(), It.IsAny<string>())).ReturnsAsync(true);
 
         // Avatar hosts in these tests are loopback WireMock endpoints, which the SSRF guard is
         // supposed to reject — that is the point of the guard. The stub resolver hands back a
@@ -106,6 +113,8 @@ internal sealed class TestFixture
             CodeCache,
             RateLimiter,
             ProfileImageService,
+            QuickConnectMock.Object,
+            QuickConnectAttemptLimiter,
             NullLogger<OidcController>.Instance);
 
         Controller.ControllerContext = new ControllerContext
