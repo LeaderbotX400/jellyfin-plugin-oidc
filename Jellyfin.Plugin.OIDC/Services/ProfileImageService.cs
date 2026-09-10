@@ -203,7 +203,7 @@ public sealed class ProfileImageService
         // check, since those exist for public CDNs. Either way the connection is still pinned to
         // the resolved address.
         var pinnedAddress = await SecurityValidation
-            .ResolveAndValidateAsync(uri, _dnsResolver, cancellationToken, allowPrivateAddresses: onAuthorityOrigin)
+            .ResolveAndValidateAsync(uri, _dnsResolver, allowPrivateAddresses: onAuthorityOrigin, cancellationToken: cancellationToken)
             .ConfigureAwait(false);
 
         using var client = _pinnedClientFactory(pinnedAddress);

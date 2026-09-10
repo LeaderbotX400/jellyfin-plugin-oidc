@@ -168,6 +168,14 @@ public class PluginConfiguration : BasePluginConfiguration
     public bool AllowLastAdminDemotion { get; set; }
 
     /// <summary>
+    /// When true (default), the SSO login-button script is spliced into the Jellyfin web UI
+    /// automatically, so no manual Branding/Custom-CSS step is needed. Turn it off if you would
+    /// rather paste the tag from /sso/OIDC/BrandingSnippet yourself, or if the injection ever
+    /// conflicts with another plugin that rewrites the same page.
+    /// </summary>
+    public bool AutoInjectLoginButtons { get; set; } = true;
+
+    /// <summary>
     /// DANGER — enables full PII logging to the server log (role lists, sub values, email addresses).
     /// Only enable temporarily for debugging. All other admins who can read server logs will be able
     /// to see arbitrary group memberships and user identifiers. Default false.

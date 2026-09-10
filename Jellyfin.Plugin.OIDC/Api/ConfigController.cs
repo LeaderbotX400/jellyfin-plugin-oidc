@@ -68,6 +68,9 @@ public class ConfigController : ControllerBase
         try
         {
             _configProvider.SaveConfiguration(incoming);
+            // The injected script is generated from provider config (labels, colours), so the
+            // patched page cached by the injection middleware is stale the moment config changes.
+            LoginButtonInjectionMiddleware.InvalidateCache();
         }
         catch (Exception ex) when (ex is InvalidOperationException or ArgumentException)
         {

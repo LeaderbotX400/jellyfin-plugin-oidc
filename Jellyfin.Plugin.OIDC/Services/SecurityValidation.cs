@@ -176,8 +176,8 @@ public static class SecurityValidation
     public static async Task<IPAddress> ResolveAndValidateAsync(
         Uri uri,
         Func<string, CancellationToken, Task<IPAddress[]>>? resolver = null,
-        CancellationToken cancellationToken = default,
-        bool allowPrivateAddresses = false)
+        bool allowPrivateAddresses = false,
+        CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(uri);
 

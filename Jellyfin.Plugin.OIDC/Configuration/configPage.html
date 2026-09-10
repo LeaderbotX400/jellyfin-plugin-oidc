@@ -139,6 +139,16 @@
                     </div>
                 </div>
 
+                <div class="checkboxContainer checkboxContainer-withDescription">
+                    <label>
+                        <input type="checkbox" id="autoInjectLoginButtons" is="emby-checkbox" />
+                        <span><strong>Auto-inject login buttons</strong></span>
+                    </label>
+                    <div class="fieldDescription checkboxFieldDescription">
+                        Adds the SSO login buttons to the Jellyfin login page automatically, with no Branding/Custom-CSS step. Turn this off if another plugin also rewrites the web UI, or if you would rather paste the snippet from <code>/sso/OIDC/BrandingSnippet</code> yourself. If the page cannot be patched it is served untouched and a warning is logged &mdash; the web UI is never broken by this.
+                    </div>
+                </div>
+
                 <div class="oidc-danger-zone">
                     <div class="oidc-danger-title">DANGER ZONE</div>
                     <div class="checkboxContainer checkboxContainer-withDescription">
