@@ -23,13 +23,13 @@ Authenticate users via any OIDC-compatible identity provider (Authentik, Keycloa
 
 | Jellyfin server | Plugin version | Target framework |
 |-----------------|----------------|------------------|
-| 12.0 and newer  | 0.2.x          | net10.0          |
-| 10.10 / 10.11   | 0.1.11.x       | net9.0           |
+| 12.0 and newer  | 1.0.x          | net10.0          |
+| 10.10 / 10.11   | 0.3.3 (final)  | net9.0           |
 
 Jellyfin 12 retargeted the server to .NET 10 and changed `IUserManager`, so a
-single build cannot serve both server lines. The 0.2.x artifact declares
+single build cannot serve both server lines. The 1.0.x artifact declares
 `targetAbi 12.0.0.0`, which stops Jellyfin's installer from offering it to a 10.x
-server; 10.x installs keep receiving 0.1.11.x from the same manifest.
+server; 10.x installs keep receiving 0.3.3 from the same manifest.
 
 **Upgrading a server to Jellyfin 12:** per Jellyfin's own 12.0 release guidance,
 remove non-built-in plugins before migrating and reinstall them afterwards. Also

@@ -1,6 +1,37 @@
 # Migration Notes
 
-## v0.2.1 — Profile pictures from the `picture` claim
+## v1.0.0 — Jellyfin 12
+
+### What changed
+
+Plugin 1.0.x targets **Jellyfin 12.0 and newer only**. Jellyfin 12 retargeted the server to
+.NET 10, so the plugin is now built for `net10.0` against `Jellyfin.Controller` 12.0.0 and
+declares `targetAbi 12.0.0.0`. It will not load on Jellyfin 10.10 or 10.11.
+
+**If you run Jellyfin 10.10/10.11:** stay on plugin **0.3.3**, the last release for that line. The published manifest still
+carries that entry, and Jellyfin's installer picks the newest version whose `targetAbi` your
+server satisfies — so a 10.x server will simply keep being offered 0.3.3 and will not be
+upgraded to 1.0.x by accident.
+
+Your existing plugin configuration carries over untouched and no config migration runs. The
+OIDC/SAML login flows, RBAC, entitlements and back-channel logout are unchanged by the retarget
+itself.
+
+This release does add four features, two of which change behaviour on upgrade without you
+configuring anything — read the next two sections before upgrading:
+
+- **Profile pictures** sync from the `picture` claim, **on by default**.
+- **Login buttons** are injected into the web UI automatically, **on by default**.
+- **Require SSO** (disable password login) — off by default, opt-in.
+- **Quick Connect bridge** for signing in native apps — no setting; it follows Jellyfin's own
+  Quick Connect switch.
+
+It also fixes a bug that stopped SSO login working entirely on servers reached over plain HTTP
+at a non-localhost address — a common LAN setup — where the login hung on
+"Completing authentication...". And account **Link/Unlink** were silently broken: they always
+answered "Could not determine current user", because the plugin read the wrong identity claim.
+
+### Profile pictures from the `picture` claim
 
 The Jellyfin avatar is now synced from the OIDC `picture` claim, and this is **on by
 default** for every provider. On the first login after upgrading, a user whose IdP
@@ -21,22 +52,13 @@ Two things may need configuration:
 
 A failed or refused avatar fetch never affects the login itself.
 
-## v0.2.0 — Jellyfin 12
+### Login buttons are now injected automatically
 
-### What changed
-
-Plugin 0.2.x targets **Jellyfin 12.0 and newer only**. Jellyfin 12 retargeted the server to
-.NET 10, so the plugin is now built for `net10.0` against `Jellyfin.Controller` 12.0.0 and
-declares `targetAbi 12.0.0.0`. It will not load on Jellyfin 10.10 or 10.11.
-
-**If you run Jellyfin 10.10/10.11:** stay on plugin **0.1.11.x**. The published manifest still
-carries that entry, and Jellyfin's installer picks the newest version whose `targetAbi` your
-server satisfies — so a 10.x server will simply keep being offered 0.1.11.x and will not be
-upgraded to 0.2.x by accident.
-
-There are **no configuration changes and no functional changes** to the OIDC/SAML login flows,
-RBAC, entitlements, or back-channel logout. Your existing plugin configuration carries over
-untouched; no config migration runs.
+The SSO buttons are added to the login page by the plugin itself, so the `<script>` tag
+you previously pasted into **Dashboard > General > Branding** is no longer needed. Leaving
+it in place is harmless — the injected script is idempotent and will not add a second set of
+buttons — but you can remove it. To go back to doing it by hand, turn off
+*Auto-inject login buttons* in the plugin's General settings.
 
 ### Server API changes absorbed by this release
 
@@ -62,7 +84,7 @@ this plugin, which never touches `DbContext` and keeps its own state in `oidc_us
 Two items from Jellyfin's own 12.0 release guidance that matter here:
 
 1. **Remove non-built-in plugins before migrating, and reinstall afterwards.** Remove OIDC-Auth
-   before the server upgrade, then install 0.2.x once the server is on 12.0. Plugin
+   before the server upgrade, then install 1.0.x once the server is on 12.0. Plugin
    configuration lives outside the plugin directory and survives this.
 2. **Fix usernames that differ only by case first.** Jellyfin 12 stores usernames in a
    normalized, uniquely-indexed column, and a pair like `Alice` / `alice` will block the server

@@ -4,7 +4,8 @@
     <!--
       Jellyfin 12 only. The 12.0 server retargeted to .NET 10 and its NuGet packages
       ship a net10.0 dependency group only, so this build cannot load on Jellyfin
-      10.11 — that server line stays on plugin 0.1.11.x. The targetAbi in
+      10.11 — that server line stays on plugin 0.3.3, the last release that supports it.
+      The targetAbi in
       build.yaml/meta.json is what keeps Jellyfin's installer from offering this
       build to a 10.x server.
     -->
@@ -14,10 +15,14 @@
     <Nullable>enable</Nullable>
     <ImplicitUsings>enable</ImplicitUsings>
     <GenerateDocumentationFile>false</GenerateDocumentationFile>
-    <!-- 0.2.x is the Jellyfin 12 line; 0.1.x was the Jellyfin 10.11 line. -->
-    <Version>0.2.1.0</Version>
-    <AssemblyVersion>0.2.1.0</AssemblyVersion>
-    <FileVersion>0.2.1.0</FileVersion>
+    <!--
+      1.x is the Jellyfin 12 line; 0.3.3 was the last Jellyfin 10.11 release. Note the
+      release workflow overrides this with -p:Version=$(tag).0, so the tag is the source of
+      truth for a published build and this value only matters for local/manual builds.
+    -->
+    <Version>1.0.0.0</Version>
+    <AssemblyVersion>1.0.0.0</AssemblyVersion>
+    <FileVersion>1.0.0.0</FileVersion>
     <!-- Static analysis: enable built-in NetAnalyzers at the recommended rule set -->
     <AnalysisLevel>latest-recommended</AnalysisLevel>
     <!-- Treat nullable warnings as hard errors; all CS86xx must be fixed, not suppressed -->

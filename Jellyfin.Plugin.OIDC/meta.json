@@ -5,9 +5,9 @@
   "overview": "OpenID Connect SSO with granular role-to-library mapping, multi-provider support, and a full admin configuration UI.",
   "owner": "LeaderbotX400",
   "category": "Authentication",
-  "version": "0.2.1.0",
+  "version": "1.0.0.0",
   "targetAbi": "12.0.0.0",
-  "changelog": "Sync the Jellyfin profile picture from the OIDC picture claim (on by default, per-provider opt-out), with an SSRF-guarded fetch: HTTPS only, Authority-origin plus admin allowlist, private/link-local address blocking, DNS-rebinding pinning, no redirects, a 5 MiB read-time cap, and magic-byte verification. Also fixes the admin config round-trip silently resetting EmailClaim, AutoLinkByVerifiedEmail, EnforceSsoOnLink, AllowInsecureAuthority and AllowedSigningAlgorithms.",
-  "timestamp": "2026-09-09T00:00:00Z",
+  "changelog": "BREAKING: requires Jellyfin 12.0 or newer; 10.10/10.11 servers stay on 0.3.3. Retargeted to .NET 10 and Jellyfin.Controller 12.0.0. New: profile pictures synced from the OIDC picture claim behind a full SSRF guard; login buttons injected into the web UI automatically; optional server-wide require-SSO mode with admin and LAN escape hatches; Quick Connect bridge so Android/iOS/Android TV apps can sign in with SSO. Fixes: SSO login no longer hangs on plain-HTTP LAN servers (crypto.randomUUID is secure-context only); the admin config round-trip no longer resets EmailClaim, AutoLinkByVerifiedEmail, EnforceSsoOnLink, AllowInsecureAuthority or AllowedSigningAlgorithms; account Link/Unlink now resolve the current user correctly; config validation errors surface as 400 with a reason instead of an opaque 500.",
+  "timestamp": "2026-09-10T00:00:00Z",
   "status": "Active"
 }
