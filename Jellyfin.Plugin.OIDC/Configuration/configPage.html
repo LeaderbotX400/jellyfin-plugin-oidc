@@ -149,6 +149,31 @@
                     </div>
                 </div>
 
+                <div class="checkboxContainer checkboxContainer-withDescription">
+                    <label>
+                        <input type="checkbox" id="requireSsoForAll" is="emby-checkbox" />
+                        <span><strong>Require SSO (disable password login)</strong></span>
+                    </label>
+                    <div class="fieldDescription checkboxFieldDescription">
+                        Refuses Jellyfin's password login endpoints so SSO is the only way in. Quick Connect is NOT blocked -- it takes no password, and it is the only sign-in path native apps have. <strong>Turn this on only after you have confirmed an SSO login works</strong>, and keep at least one escape hatch below enabled.
+                    </div>
+                </div>
+                <div class="checkboxContainer checkboxContainer-withDescription">
+                    <label>
+                        <input type="checkbox" id="ssoExemptAdmins" is="emby-checkbox" />
+                        <span><strong>Escape hatch: administrators may still use a password</strong></span>
+                    </label>
+                    <div class="fieldDescription checkboxFieldDescription">
+                        Break-glass for an IdP outage. The submitted username is looked up and checked for the administrator permission -- not matched by name. Leave ON unless you have another recovery path.
+                    </div>
+                </div>
+                <div class="inputContainer">
+                    <input is="emby-input" type="text" id="ssoExemptCidrs" label="Escape hatch: CIDRs allowed to use a password" />
+                    <div class="fieldDescription">
+                        Comma-separated CIDRs that may still use password login, e.g. <code>192.168.0.0/16, 10.0.0.0/8</code> so the household can sign in when the IdP is unreachable. Uses the same trusted-proxy rules as the rest of the plugin, so a spoofed X-Forwarded-For cannot buy an exemption.
+                    </div>
+                </div>
+
                 <div class="oidc-danger-zone">
                     <div class="oidc-danger-title">DANGER ZONE</div>
                     <div class="checkboxContainer checkboxContainer-withDescription">

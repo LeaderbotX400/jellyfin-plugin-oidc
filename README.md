@@ -16,6 +16,7 @@ Authenticate users via any OIDC-compatible identity provider (Authentik, Keycloa
 - **Admin UI** - full configuration from the Jellyfin dashboard (Providers, Role Mappings, General settings)
 - **Auto-injected login buttons** - no manual branding HTML required
 - **Profile pictures** - sync the Jellyfin avatar from the OIDC `picture` claim, behind a full SSRF guard
+- **Optional SSO-only mode** - refuse Jellyfin's password login, with admin and LAN escape hatches
 
 ## Compatibility
 
@@ -118,6 +119,47 @@ settings and paste the tag from `GET /sso/OIDC/BrandingSnippet` into
 Injection is best-effort by design: if Jellyfin's web shell ever changes shape enough that the
 plugin cannot find an insertion point, it serves the page untouched and logs a warning telling you
 to use the manual snippet. It never breaks the web UI.
+
+## Requiring SSO
+
+By default the plugin adds SSO alongside Jellyfin's password login. To make SSO the only
+way in, enable **Require SSO (disable password login)** in the plugin's General settings.
+
+**Turn this on only after you have confirmed an SSO login works**, and leave at least one
+escape hatch enabled. There is no way to undo it from the login page.
+
+| Endpoint | Under Require SSO |
+|----------|-------------------|
+| `POST /Users/AuthenticateByName` | refused, `403 sso_required` |
+| `POST /Users/{userId}/Authenticate` (obsolete, still routed) | refused |
+| `POST /Users/AuthenticateWithQuickConnect` | **allowed** |
+
+Quick Connect stays open on purpose. It never takes a password — a code is approved from an
+already-authenticated session, which under this policy can only have come from SSO, so it
+already inherits the requirement. Blocking it would lock out Android, iOS/Swiftfin and
+Android TV, which cannot render a web login button and have no other way in.
+
+Existing sessions are unaffected: the gate is on session *creation*, so nobody is signed out
+when you enable it.
+
+### Escape hatches
+
+- **Administrators may still use a password** (on by default) — break-glass for an IdP
+  outage. The submitted username is looked up through `IUserManager` and checked for the
+  administrator permission; it is *not* a name match, and it is not a password bypass —
+  a wrong password still fails.
+- **CIDRs allowed to use a password** — e.g. `192.168.0.0/16` so the household can sign in
+  when the IdP is unreachable. Evaluated through the same trusted-proxy rules as the rest
+  of the plugin, so a spoofed `X-Forwarded-For` cannot buy an exemption unless the
+  immediate peer is already a configured trusted proxy.
+
+If the plugin config is ever unreadable, the gate fails **open**. Locking every account out
+of a server over a transient config read is worse than one unblocked password login.
+
+### If you lock yourself out
+
+Stop Jellyfin, edit `config/plugins/configurations/OIDC-Auth.xml`, set
+`<RequireSsoForAll>false</RequireSsoForAll>`, and start it again.
 
 ## Migrating Existing Users
 

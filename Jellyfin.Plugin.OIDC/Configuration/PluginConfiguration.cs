@@ -168,6 +168,29 @@ public class PluginConfiguration : BasePluginConfiguration
     public bool AllowLastAdminDemotion { get; set; }
 
     /// <summary>
+    /// When true, Jellyfin's native password-authentication endpoints are refused, making SSO the
+    /// only way in. Quick Connect is deliberately NOT blocked (see RequireSsoMiddleware).
+    /// Default false -- this locks people out if the IdP is misconfigured, so it must be a
+    /// deliberate choice made after SSO is known to work.
+    /// </summary>
+    public bool RequireSsoForAll { get; set; }
+
+    /// <summary>
+    /// When true, a password login for a user who really is a Jellyfin administrator is still
+    /// allowed while <see cref="RequireSsoForAll"/> is on. This is the break-glass path for an IdP
+    /// outage. The check is a real IUserManager lookup of the submitted username, not a name match.
+    /// </summary>
+    public bool SsoExemptAdmins { get; set; } = true;
+
+    /// <summary>
+    /// CIDRs whose clients may still use password login while <see cref="RequireSsoForAll"/> is on --
+    /// typically the LAN, so a household can sign in when the IdP is unreachable. Evaluated through
+    /// ClientIpResolver, so a spoofed X-Forwarded-For cannot buy an exemption unless the immediate
+    /// peer is already a configured trusted proxy.
+    /// </summary>
+    public List<string> SsoExemptCidrs { get; set; } = new();
+
+    /// <summary>
     /// When true (default), the SSO login-button script is spliced into the Jellyfin web UI
     /// automatically, so no manual Branding/Custom-CSS step is needed. Turn it off if you would
     /// rather paste the tag from /sso/OIDC/BrandingSnippet yourself, or if the injection ever

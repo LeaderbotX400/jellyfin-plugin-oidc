@@ -51,6 +51,7 @@ public class ServiceRegistrator : IPluginServiceRegistrator
 
         // IStartupFilter is the only hook a plugin has for adding ASP.NET Core middleware.
         serviceCollection.AddSingleton<IStartupFilter, LoginButtonStartupFilter>();
+        serviceCollection.AddSingleton<IStartupFilter, RequireSsoStartupFilter>();
         serviceCollection.AddTransient<IScheduledTask, RbacResyncTask>();
     }
 }
