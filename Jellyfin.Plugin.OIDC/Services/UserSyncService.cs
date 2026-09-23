@@ -25,6 +25,21 @@ public sealed class OidcUsernameCollisionException : InvalidOperationException
     public string Username { get; }
 }
 
+/// <summary>
+/// Thrown when the SSO identity resolves to a Jellyfin account that is disabled. Jellyfin itself
+/// only refuses disabled accounts on the password path, so the plugin must refuse here.
+/// </summary>
+public sealed class OidcUserDisabledException : InvalidOperationException
+{
+    public OidcUserDisabledException(string username)
+        : base($"The account '{username}' is disabled.")
+    {
+        Username = username;
+    }
+
+    public string Username { get; }
+}
+
 public class UserSyncService
 {
     private readonly IUserManager _userManager;
@@ -88,14 +103,10 @@ public class UserSyncService
         {
             // No sub-link yet. Resolution order, most-explicit-first:
             //
-            //   Path 1: Admin-pre-authorized user. The admin set someone's Authentication
-            //           Provider to "OIDC-Auth" in Jellyfin's standard user UI. We find that
-            //           user by the AuthProviderId pin — NOT by username — because Jellyfin
-            //           usernames are display labels, not identities, and there's no reason
-            //           the OIDC preferred_username should match a chosen Jellyfin username.
-            //           If exactly one user is pre-marked and unbound, we bind it. If multiple
-            //           are pre-marked, we tiebreak by username match (best-effort) and refuse
-            //           if still ambiguous.
+            //   Path 1: Admin-pre-authorized user. The admin set the Authentication Provider of
+            //           the user with this exact username to "OIDC-Auth" in Jellyfin's standard
+            //           user UI, and that user has never been bound to any SSO identity. See
+            //           FindAdminPreAuthorizedUserAsync for why both conditions are required.
             //
             //   Path 2: AutoLinkByVerifiedEmail policy (opt-in per provider).
             //
@@ -111,17 +122,8 @@ public class UserSyncService
                 _logger.LogInformation(
                     "Linked OIDC sub={SubRedacted} to user '{Username}' via admin-set AuthenticationProviderId",
                     LogRedaction.RedactSub(sub), user.Username);
-
-                // Fall through to UpdateUserAsync + Upsert + RBAC apply.
-                await _userManager.UpdateUserAsync(user).ConfigureAwait(false);
-                await UpsertAndApplyAsync(user, sub, providerId, roles, entitlements).ConfigureAwait(false);
-                return user.Id;
             }
-
-            // Fall back to username-based lookup for the remaining paths (create / collision).
-            var existing = _userManager.GetUserByName(username);
-
-            if (existing == null)
+            else if (_userManager.GetUserByName(username) is not { } existing)
             {
                 if (config.AutoCreateUsers != true)
                 {
@@ -155,7 +157,8 @@ public class UserSyncService
             }
         }
 
-        // NOTE: We deliberately do NOT touch IsDisabled here. A disabled user must stay disabled.
+        // NOTE: We deliberately do NOT clear IsDisabled here. A disabled user must stay disabled
+        //       (and is refused below).
         // NOTE: We deliberately do NOT overwrite AuthenticationProviderId for users we didn't create
         //       (handled above only on the create / EnforceSsoOnLink paths).
 
@@ -181,6 +184,17 @@ public class UserSyncService
                 user.Id,
                 $"provider={providerId}",
                 Microsoft.Extensions.Logging.LogLevel.Information).ConfigureAwait(false);
+        }
+
+        // Jellyfin enforces IsDisabled only on its own password path (UserManager.AuthenticateUser).
+        // SessionManager.AuthenticateDirect — which every SSO login ends in — and the per-request
+        // authorization handler never look at it, so without this check a disabled account keeps
+        // signing in through SSO. Checked after RBAC so an entitlement that disables the user
+        // takes effect on the login that carries it.
+        var current = _userManager.GetUserById(user.Id) ?? user;
+        if (current.HasPermission(PermissionKind.IsDisabled))
+        {
+            throw new OidcUserDisabledException(current.Username);
         }
 
         return user.Id;
@@ -252,70 +266,41 @@ public class UserSyncService
     }
 
     /// <summary>
-    /// Finds the user (if any) that an admin has pre-authorized for OIDC login by setting their
-    /// Authentication Provider to "OIDC-Auth" in Jellyfin's standard user UI. Identification is
-    /// by the AuthProviderId pin alone — Jellyfin usernames are not identities, so we do not
-    /// require the OIDC preferred_username to match.
+    /// Finds the user (if any) that an admin has pre-authorized for this SSO login: the local user
+    /// whose username matches the incoming one, whose Authentication Provider an admin set to
+    /// "OIDC-Auth", and who has never been bound to any SSO identity.
     ///
-    /// Resolution:
-    ///   - 0 candidates: returns null (caller continues with create/collision logic).
-    ///   - 1 candidate: returns that user.
-    ///   - N candidates (admin pinned multiple users for OIDC, all still unbound):
-    ///       prefer a username match against the incoming OIDC username; on tie or no match,
-    ///       refuse with a clear error so the admin can disambiguate.
+    /// Every condition is load-bearing. The pin alone is not an identity: the plugin pins every
+    /// user it creates, so "pinned and not linked on THIS provider" matched every existing SSO user
+    /// the moment a second provider (or a SAML provider) existed — and handed their account to
+    /// whichever new identity logged in first. Requiring zero links and zero stored records means
+    /// only an account that has never had an SSO owner can be claimed, and requiring the username
+    /// means it can only be claimed by the identity the admin named. Jellyfin usernames are unique,
+    /// so there is at most one candidate.
     /// </summary>
     private async Task<Jellyfin.Database.Implementations.Entities.User?> FindAdminPreAuthorizedUserAsync(
         string ourProviderId, string oidcUsername, string providerId)
     {
-        var candidates = new List<Jellyfin.Database.Implementations.Entities.User>();
-        foreach (var u in JellyfinCompat.EnumerateUsers(_userManager))
+        var candidate = _userManager.GetUserByName(oidcUsername);
+        if (candidate is null
+            || !string.Equals(candidate.AuthenticationProviderId, ourProviderId, StringComparison.Ordinal))
         {
-            if (!string.Equals(u.AuthenticationProviderId, ourProviderId, StringComparison.Ordinal)) continue;
-            // Already linked to some sub on this provider? Then this candidate "belongs" to that
-            // other sub; skip. (Different provider — we'd happily link them on a 2nd provider.)
-            var existingLinks = await _userStore.GetLinksForUserAsync(u.Id).ConfigureAwait(false);
-            var alreadyLinkedOnThisProvider = false;
-            foreach (var l in existingLinks)
-            {
-                if (string.Equals(l.ProviderId, providerId, StringComparison.OrdinalIgnoreCase))
-                {
-                    alreadyLinkedOnThisProvider = true;
-                    break;
-                }
-            }
-            if (alreadyLinkedOnThisProvider) continue;
-            candidates.Add(u);
+            return null;
         }
 
-        if (candidates.Count == 0) return null;
-        if (candidates.Count == 1) return candidates[0];
-
-        var byName = candidates.Find(u =>
-            string.Equals(u.Username, oidcUsername, StringComparison.OrdinalIgnoreCase));
-        if (byName != null) return byName;
-
-        _logger.LogWarning(
-            "Multiple admin-pre-authorized OIDC users found and none match OIDC username '{Username}'. " +
-            "Refuse to guess; admin should leave only one user pre-marked for OIDC, OR rename one of the candidates to match the OIDC username.",
-            oidcUsername);
-        throw new OidcUsernameCollisionException(oidcUsername);
-    }
-
-    private async Task UpsertAndApplyAsync(
-        Jellyfin.Database.Implementations.Entities.User user,
-        string sub, string providerId, string[] roles, string[] entitlements)
-    {
-        await _userStore.UpsertAsync(new OidcUserRecord
+        var links = await _userStore.GetLinksForUserAsync(candidate.Id).ConfigureAwait(false);
+        var record = await _userStore.GetByUserIdAsync(candidate.Id).ConfigureAwait(false);
+        if (links.Count > 0 || record is not null)
         {
-            UserId = user.Id,
-            Username = user.Username,
-            Sub = sub,
-            ProviderId = providerId,
-            Roles = roles,
-            Entitlements = entitlements
-        }).ConfigureAwait(false);
+            // Already owned by some SSO identity. Never rebind; the caller falls through to the
+            // collision path, which refuses.
+            _logger.LogWarning(
+                "Not treating '{Username}' as pre-authorized for provider {Provider}: that user is already bound to an SSO identity",
+                candidate.Username, providerId);
+            return null;
+        }
 
-        await _rbacService.ApplyRoleMappingsAsync(user.Id, roles, entitlements, providerId).ConfigureAwait(false);
+        return candidate;
     }
 
     private Configuration.OidcProviderConfig? FindProvider(string providerId)

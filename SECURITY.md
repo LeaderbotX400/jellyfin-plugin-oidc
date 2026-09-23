@@ -45,11 +45,18 @@ defend the server.
 - **Brute-force / state-fuzzing.** Per-IP rate limit on the OIDC
   callback (`CallbackRateLimiter`) bans IPs after 10 failures in 5
   minutes for 15 minutes.
-- **Account takeover via username collision.** OIDC logins whose
-  preferred username matches an existing local user are rejected unless
-  the admin has set the user's authentication provider, or
+- **Account takeover via username collision.** SSO logins whose
+  username matches an existing local user are rejected unless
   `AutoLinkByVerifiedEmail` is enabled and the IdP asserts a verified
-  email matching the local Jellyfin username.
+  email matching the local Jellyfin username, or an admin
+  pre-authorized that user: set its authentication provider to
+  OIDC-Auth, and the user has never been bound to any SSO identity. A
+  user that already belongs to an SSO identity, on any provider, is
+  never rebound to another one.
+- **Disabled accounts.** Jellyfin checks the disabled flag only on its
+  own password path, so the plugin refuses SSO logins (and Quick
+  Connect approvals) for disabled accounts itself. RBAC never clears
+  the flag.
 - **Optional IdP-MFA enforcement.** Per-provider `RequiredAmrValues`
   and `RequiredAcrValues` reject logins whose ID token does not assert
   the configured authentication-method or assurance-level claims (RFC

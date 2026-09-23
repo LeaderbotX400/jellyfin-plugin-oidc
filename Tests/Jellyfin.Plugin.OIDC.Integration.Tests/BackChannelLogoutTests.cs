@@ -22,106 +22,14 @@ using Xunit;
 namespace Jellyfin.Plugin.OIDC.Integration.Tests;
 
 /// <summary>
-/// Integration tests for account-linking endpoints (LinkStart / Unlink / GetLinks)
-/// and the OIDC back-channel logout endpoint.
+/// Integration tests for the OIDC back-channel logout endpoint.
 /// </summary>
-public sealed class LinkingAndLogoutTests : IClassFixture<MockIdpFixture>
+public sealed class BackChannelLogoutTests : IClassFixture<MockIdpFixture>
 {
     private const string ProviderId = "testidp";
     private readonly MockIdpFixture _idp;
 
-    public LinkingAndLogoutTests(MockIdpFixture idp) => _idp = idp;
-
-    // ── Account linking ────────────────────────────────────────────────────
-
-    [Fact]
-    public async Task LinkFlow_LinksExistingUserToOidcIdentity()
-    {
-        var fixture = new TestFixture(_idp);
-        fixture.AddProvider();
-
-        // Seed an existing Jellyfin user that we will link to an OIDC identity
-        var existingUser = fixture.UserStore.Inner.CreateUser("existing-jellyfin-user");
-        AttachAuthenticatedUser(fixture.Controller, existingUser.Id);
-
-        // Drive LinkStart → captures state with LinkingForUserId set
-        var startResult = await fixture.Controller.LinkStart(ProviderId);
-        var redirect = Assert.IsType<RedirectResult>(startResult);
-        var state = HttpUtility.ParseQueryString(new Uri(redirect.Url).Query)["state"]!;
-        var nonce = HttpUtility.ParseQueryString(new Uri(redirect.Url).Query)["nonce"]!;
-        TestFixture.PropagateCookies(fixture.Controller);
-
-        // IdP returns token for a DIFFERENT user identity (oidc sub != existing username)
-        _idp.EnqueueTokenResponse(
-            sub: "external-oidc-id",
-            username: "totally-different-name",
-            nonce: nonce);
-
-        // Detach the auth context since the callback runs without auth
-        fixture.Controller.ControllerContext.HttpContext.User = new ClaimsPrincipal(new ClaimsIdentity());
-        var callbackResult = await fixture.Controller.Callback(ProviderId, code: "code", state: state);
-        var content = Assert.IsType<ContentResult>(callbackResult);
-        var token = ExtractSessionToken(content);
-
-        // Authenticate — should write a link, not auto-provision a new user
-        var authResult = await fixture.Controller.Authenticate(
-            ProviderId,
-            new AuthenticateRequest { Token = token });
-        var ok = Assert.IsType<OkObjectResult>(authResult);
-        var linkedFlag = ok.Value!.GetType().GetProperty("Linked")!.GetValue(ok.Value);
-        Assert.Equal(true, linkedFlag);
-
-        // Confirm the link is persisted: GetLinkedUserIdAsync resolves to our existing user
-        var linked = await fixture.OidcUserStore.GetLinkedUserIdAsync("external-oidc-id", ProviderId);
-        Assert.Equal(existingUser.Id, linked);
-
-        // A normal login flow with the SAME OIDC identity should resolve the linked user
-        // rather than auto-provisioning a new "totally-different-name"
-        await fixture.RunFullFlow("totally-different-name", "external-oidc-id");
-        Assert.Null(fixture.UserStore.GetByName("totally-different-name"));
-    }
-
-    [Fact]
-    public async Task Unlink_RemovesLinkForCurrentUser()
-    {
-        var fixture = new TestFixture(_idp);
-        var user = fixture.UserStore.Inner.CreateUser("alice");
-        await fixture.OidcUserStore.LinkAsync(user.Id, "sub-xyz", ProviderId);
-
-        AttachAuthenticatedUser(fixture.Controller, user.Id);
-        var result = await fixture.Controller.Unlink(ProviderId);
-        Assert.IsType<OkResult>(result);
-
-        var stillLinked = await fixture.OidcUserStore.GetLinkedUserIdAsync("sub-xyz", ProviderId);
-        Assert.Null(stillLinked);
-    }
-
-    [Fact]
-    public async Task GetLinks_ReturnsAllLinksForCurrentUser()
-    {
-        var fixture = new TestFixture(_idp);
-        var user = fixture.UserStore.Inner.CreateUser("bob");
-        await fixture.OidcUserStore.LinkAsync(user.Id, "sub-1", "providerA");
-        await fixture.OidcUserStore.LinkAsync(user.Id, "sub-2", "providerB");
-
-        AttachAuthenticatedUser(fixture.Controller, user.Id);
-        var result = await fixture.Controller.GetLinks();
-        var ok = Assert.IsType<OkObjectResult>(result);
-
-        var links = ((System.Collections.IEnumerable)ok.Value!).Cast<object>().ToList();
-        Assert.Equal(2, links.Count);
-    }
-
-    [Fact]
-    public async Task LinkStart_NoAuthenticatedUser_ReturnsUnauthorized()
-    {
-        var fixture = new TestFixture(_idp);
-        fixture.AddProvider();
-        // No AttachAuthenticatedUser → no NameIdentifier claim → controller can't resolve user
-
-        var result = await fixture.Controller.LinkStart(ProviderId);
-        Assert.IsType<UnauthorizedObjectResult>(result);
-    }
+    public BackChannelLogoutTests(MockIdpFixture idp) => _idp = idp;
 
     // ── Back-channel logout ────────────────────────────────────────────────
 
@@ -449,18 +357,4 @@ public sealed class LinkingAndLogoutTests : IClassFixture<MockIdpFixture>
         c.ControllerContext = fixture.Controller.ControllerContext;
         return c;
     }
-
-    // ── Helpers ────────────────────────────────────────────────────────────
-
-    private static void AttachAuthenticatedUser(OidcController controller, Guid userId)
-    {
-        var identity = new ClaimsIdentity(new[]
-        {
-            new Claim(ClaimTypes.NameIdentifier, userId.ToString())
-        }, "TestAuth");
-        controller.ControllerContext.HttpContext.User = new ClaimsPrincipal(identity);
-    }
-
-    private static string ExtractSessionToken(ContentResult content) =>
-        TestFixture.ExtractSessionTokenFromHtml(content.Content ?? string.Empty);
 }

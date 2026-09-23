@@ -53,6 +53,10 @@ public sealed class UserSyncServiceTests : IDisposable
             .Returns<User>(u => { _userStore.ById[u.Id] = u; return Task.CompletedTask; });
         userManagerMock.Setup(m => m.ChangePassword(It.IsAny<Guid>(), It.IsAny<string>()))
             .Returns(Task.CompletedTask);
+        // Real Jellyfin exposes GetUsers(); leaving it unmocked hid the pre-authorized-binding
+        // takeover, because enumeration silently returned nobody.
+        userManagerMock.Setup(m => m.GetUsers())
+            .Returns(() => _userStore.ById.Values.ToList());
         _users = userManagerMock.Object;
 
         // RbacService needs ILibraryManager + IActivityManager; supply Moq stubs.
@@ -185,22 +189,137 @@ public sealed class UserSyncServiceTests : IDisposable
     }
 
     [Fact]
-    public async Task DisabledUser_StaysDisabled()
+    public async Task DisabledUser_IsRefused_AndStaysDisabled()
     {
-        // Pre-existing OIDC-linked user that has been disabled by an admin.
+        // Jellyfin only refuses disabled accounts on its password path, so SSO must refuse here.
         var existing = _userStore.CreateUser("bob");
         existing.SetPermission(PermissionKind.IsDisabled, true);
         await _store.LinkAsync(existing.Id, "sub-bob", ProviderId);
 
-        await _sync.SyncUserAsync(
+        await Assert.ThrowsAsync<OidcUserDisabledException>(() => _sync.SyncUserAsync(
             "bob", null, "sub-bob",
             Array.Empty<string>(), Array.Empty<string>(),
+            ProviderId, email: null, emailVerified: false));
+
+        Assert.True(IsDisabled(existing));
+    }
+
+    [Fact]
+    public async Task DisabledUser_MatchingRoleMapping_IsNotReEnabledByRbac()
+    {
+        // The authoritative RBAC mode used to resolve IsDisabled to false on every matched login,
+        // silently undoing an administrator's "disable this account".
+        _config.Configuration.RoleMappings.Add(new RoleMapping { RoleName = "viewers" });
+        var existing = _userStore.CreateUser("carl");
+        existing.SetPermission(PermissionKind.IsDisabled, true);
+        await _store.LinkAsync(existing.Id, "sub-carl", ProviderId);
+
+        await Assert.ThrowsAsync<OidcUserDisabledException>(() => _sync.SyncUserAsync(
+            "carl", null, "sub-carl",
+            new[] { "viewers" }, Array.Empty<string>(),
+            ProviderId, email: null, emailVerified: false));
+
+        Assert.True(IsDisabled(existing));
+    }
+
+    [Fact]
+    public async Task DisabledEntitlement_RefusesTheLoginThatCarriesIt()
+    {
+        var resultTask = _sync.SyncUserAsync(
+            "dora", null, "sub-dora",
+            Array.Empty<string>(), new[] { "jellyfin:disabled" },
             ProviderId, email: null, emailVerified: false);
 
-        var disabled = existing.Permissions
-            .FirstOrDefault(p => p.Kind == PermissionKind.IsDisabled)?.Value ?? false;
-        Assert.True(disabled);
+        await Assert.ThrowsAsync<OidcUserDisabledException>(() => resultTask);
+        Assert.True(IsDisabled(_users.GetUserByName("dora")!));
     }
+
+    // ── Pre-authorized binding (admin pinned the user to OIDC-Auth) ──────────
+
+    private static readonly string OurAuthProvider = typeof(Jellyfin.Plugin.OIDC.Auth.OidcAuthProvider).FullName!;
+
+    [Fact]
+    public async Task PreAuthorized_MatchingUsername_NeverLinked_Binds()
+    {
+        var pinned = _userStore.CreateUser("erin");
+        pinned.AuthenticationProviderId = OurAuthProvider;
+
+        var id = await _sync.SyncUserAsync(
+            "erin", null, "sub-erin", Array.Empty<string>(), Array.Empty<string>(),
+            ProviderId, null, false);
+
+        Assert.Equal(pinned.Id, id);
+        Assert.Equal(pinned.Id, await _store.GetLinkedUserIdAsync("sub-erin", ProviderId));
+    }
+
+    [Fact]
+    public async Task PreAuthorized_DifferentUsername_IsNotClaimed()
+    {
+        // The pin alone used to be enough: the only pinned user was bound to whichever new
+        // identity logged in first, whatever its name.
+        var pinned = _userStore.CreateUser("frank");
+        pinned.AuthenticationProviderId = OurAuthProvider;
+
+        var id = await _sync.SyncUserAsync(
+            "mallory", null, "sub-mallory", Array.Empty<string>(), Array.Empty<string>(),
+            ProviderId, null, false);
+
+        Assert.NotEqual(pinned.Id, id);
+        Assert.Empty(await _store.GetLinksForUserAsync(pinned.Id));
+    }
+
+    [Fact]
+    public async Task SecondProvider_CannotTakeOverUserCreatedByFirstProvider()
+    {
+        // Every plugin-created user is pinned to OIDC-Auth. It used to count as "pre-authorized"
+        // for any provider it was not yet linked on — so a new identity on a second provider,
+        // choosing the victim's username, was bound straight into the victim's account.
+        _config.Configuration.Providers.Add(new OidcProviderConfig { ProviderId = "other", Enabled = true });
+
+        var victimId = await _sync.SyncUserAsync(
+            "grace", null, "sub-grace-A", Array.Empty<string>(), Array.Empty<string>(),
+            ProviderId, null, false);
+
+        await Assert.ThrowsAsync<OidcUsernameCollisionException>(() => _sync.SyncUserAsync(
+            "grace", null, "attacker-sub-B", Array.Empty<string>(), Array.Empty<string>(),
+            "other", null, false));
+
+        Assert.Null(await _store.GetLinkedUserIdAsync("attacker-sub-B", "other"));
+        Assert.Single(await _store.GetLinksForUserAsync(victimId));
+    }
+
+    [Fact]
+    public async Task SamlProvider_CannotTakeOverSamlLinkedUser()
+    {
+        // SAML link keys were mis-parsed, so a SAML-linked user always looked unlinked.
+        var victimId = await _sync.SyncUserAsync(
+            "heidi", null, "nameid-heidi", Array.Empty<string>(), Array.Empty<string>(),
+            "saml:corp", null, false);
+
+        await Assert.ThrowsAsync<OidcUsernameCollisionException>(() => _sync.SyncUserAsync(
+            "heidi", null, "nameid-attacker", Array.Empty<string>(), Array.Empty<string>(),
+            "saml:corp", null, false));
+
+        Assert.Null(await _store.GetLinkedUserIdAsync("nameid-attacker", "saml:corp"));
+        Assert.Equal(victimId, await _store.GetLinkedUserIdAsync("nameid-heidi", "saml:corp"));
+    }
+
+    [Fact]
+    public async Task PreAuthorized_UserWithStoredRecordButNoLink_IsNotClaimed()
+    {
+        // After an admin store reset links are gone but the account has had an SSO owner; a stored
+        // record is enough to refuse re-binding.
+        var pinned = _userStore.CreateUser("ivan");
+        pinned.AuthenticationProviderId = OurAuthProvider;
+        await _store.UpsertAsync(new OidcUserRecord { UserId = pinned.Id, Sub = "old-sub", ProviderId = ProviderId });
+
+        await Assert.ThrowsAsync<OidcUsernameCollisionException>(() => _sync.SyncUserAsync(
+            "ivan", null, "new-sub", Array.Empty<string>(), Array.Empty<string>(),
+            ProviderId, null, false));
+    }
+
+    private static bool IsDisabled(User user) =>
+        user.Permissions.FirstOrDefault(p => p.Kind == PermissionKind.IsDisabled)?.Value ?? false;
 
     [Fact]
     public async Task ExistingLocalUser_AuthProviderIdNotOverwritten_UnlessEnforceSsoOnLink()

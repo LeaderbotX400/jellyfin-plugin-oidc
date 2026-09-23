@@ -11,8 +11,7 @@ namespace Jellyfin.Plugin.OIDC.Integration.Tests;
 
 /// <summary>
 /// TASK-06 verification: the OIDC /Callback handler must reject any request that doesn't
-/// present the per-browser CSRF binding cookie issued at /Start. And LinkStart must be
-/// POST-only (no GET) with JSON Content-Type required.
+/// present the per-browser CSRF binding cookie issued at /Start.
 /// </summary>
 public sealed class CsrfBindingTests : IClassFixture<MockIdpFixture>
 {
@@ -67,35 +66,5 @@ public sealed class CsrfBindingTests : IClassFixture<MockIdpFixture>
         _idp.EnqueueTokenResponse(sub: "csrf-ok", username: "csrf-ok", nonce: nonce);
         var callbackResult = await fixture.Controller.Callback(ProviderId, code: "code", state: state);
         Assert.IsType<ContentResult>(callbackResult);
-    }
-
-    [Fact]
-    public async Task LinkStart_GetVerbIsNotBoundByController()
-    {
-        // LinkStart is now [HttpPost]. The runtime routing layer rejects a GET with 405,
-        // but at the controller-method level we just verify the attribute is POST.
-        var method = typeof(OidcController).GetMethod(nameof(OidcController.LinkStart));
-        Assert.NotNull(method);
-        var attrs = method!.GetCustomAttributes(typeof(Microsoft.AspNetCore.Mvc.HttpPostAttribute), inherit: false);
-        Assert.NotEmpty(attrs);
-        var hasGet = method.GetCustomAttributes(typeof(Microsoft.AspNetCore.Mvc.HttpGetAttribute), inherit: false);
-        Assert.Empty(hasGet);
-        // And it must require JSON Content-Type so cross-origin form posts can't reach it.
-        var consumes = method.GetCustomAttributes(typeof(Microsoft.AspNetCore.Mvc.ConsumesAttribute), inherit: false);
-        Assert.NotEmpty(consumes);
-    }
-
-    [Fact]
-    public async Task LinkStart_PostFromAuthenticatedUser_Succeeds()
-    {
-        var fixture = new TestFixture(_idp);
-        fixture.AddProvider();
-        var user = fixture.UserStore.Inner.CreateUser("link-target");
-        var identity = new ClaimsIdentity(
-            new[] { new Claim(ClaimTypes.NameIdentifier, user.Id.ToString()) }, "Test");
-        fixture.Controller.ControllerContext.HttpContext.User = new ClaimsPrincipal(identity);
-
-        var result = await fixture.Controller.LinkStart(ProviderId);
-        Assert.IsType<RedirectResult>(result);
     }
 }

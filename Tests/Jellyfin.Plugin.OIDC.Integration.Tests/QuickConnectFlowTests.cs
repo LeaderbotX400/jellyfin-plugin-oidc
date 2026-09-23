@@ -2,6 +2,8 @@ using System;
 using System.Linq;
 using System.Threading.Tasks;
 using System.Web;
+using Jellyfin.Data;
+using Jellyfin.Database.Implementations.Enums;
 using Microsoft.AspNetCore.Mvc;
 using Moq;
 using Xunit;
@@ -181,7 +183,7 @@ public class CurrentUserClaimTests : IClassFixture<MockIdpFixture>
     {
         var fixture = new TestFixture(_idp);
         fixture.AddProvider();
-        var userId = Guid.NewGuid();
+        var userId = fixture.UserStore.Inner.CreateUser("qc-user").Id;
         SignIn(fixture.Controller, new System.Security.Claims.Claim("Jellyfin-UserId", userId.ToString("N")));
 
         var result = await fixture.Controller.QuickConnectAuthorize(
@@ -196,7 +198,7 @@ public class CurrentUserClaimTests : IClassFixture<MockIdpFixture>
     {
         var fixture = new TestFixture(_idp);
         fixture.AddProvider();
-        var userId = Guid.NewGuid();
+        var userId = fixture.UserStore.Inner.CreateUser("qc-user").Id;
         SignIn(fixture.Controller, new System.Security.Claims.Claim(
             System.Security.Claims.ClaimTypes.NameIdentifier, userId.ToString()));
 
@@ -210,7 +212,7 @@ public class CurrentUserClaimTests : IClassFixture<MockIdpFixture>
     {
         var fixture = new TestFixture(_idp);
         fixture.AddProvider();
-        var userId = Guid.NewGuid();
+        var userId = fixture.UserStore.Inner.CreateUser("qc-user").Id;
         SignIn(fixture.Controller, new System.Security.Claims.Claim("Jellyfin-UserId", userId.ToString("N")));
 
         await fixture.Controller.QuickConnectAuthorize(
@@ -227,7 +229,7 @@ public class CurrentUserClaimTests : IClassFixture<MockIdpFixture>
     {
         var fixture = new TestFixture(_idp);
         fixture.AddProvider();
-        SignIn(fixture.Controller, new System.Security.Claims.Claim("Jellyfin-UserId", Guid.NewGuid().ToString("N")));
+        SignIn(fixture.Controller, new System.Security.Claims.Claim("Jellyfin-UserId", fixture.UserStore.Inner.CreateUser("qc-user").Id.ToString("N")));
 
         Assert.IsType<BadRequestObjectResult>(await fixture.Controller.QuickConnectAuthorize(
             new Jellyfin.Plugin.OIDC.Api.QuickConnectAuthorizeRequest { Code = code }));
@@ -240,7 +242,7 @@ public class CurrentUserClaimTests : IClassFixture<MockIdpFixture>
     {
         var fixture = new TestFixture(_idp);
         fixture.AddProvider();
-        SignIn(fixture.Controller, new System.Security.Claims.Claim("Jellyfin-UserId", Guid.NewGuid().ToString("N")));
+        SignIn(fixture.Controller, new System.Security.Claims.Claim("Jellyfin-UserId", fixture.UserStore.Inner.CreateUser("qc-user").Id.ToString("N")));
         fixture.QuickConnectMock.Setup(q => q.AuthorizeRequest(It.IsAny<Guid>(), It.IsAny<string>()))
             .ThrowsAsync(new MediaBrowser.Common.Extensions.ResourceNotFoundException("nope"));
 
@@ -256,7 +258,7 @@ public class CurrentUserClaimTests : IClassFixture<MockIdpFixture>
     {
         var fixture = new TestFixture(_idp);
         fixture.AddProvider();
-        SignIn(fixture.Controller, new System.Security.Claims.Claim("Jellyfin-UserId", Guid.NewGuid().ToString("N")));
+        SignIn(fixture.Controller, new System.Security.Claims.Claim("Jellyfin-UserId", fixture.UserStore.Inner.CreateUser("qc-user").Id.ToString("N")));
         fixture.QuickConnectMock.Setup(q => q.AuthorizeRequest(It.IsAny<Guid>(), It.IsAny<string>()))
             .ThrowsAsync(new InvalidOperationException("Request is already authorized"));
 
@@ -272,7 +274,7 @@ public class CurrentUserClaimTests : IClassFixture<MockIdpFixture>
     {
         var fixture = new TestFixture(_idp);
         fixture.AddProvider();
-        SignIn(fixture.Controller, new System.Security.Claims.Claim("Jellyfin-UserId", Guid.NewGuid().ToString("N")));
+        SignIn(fixture.Controller, new System.Security.Claims.Claim("Jellyfin-UserId", fixture.UserStore.Inner.CreateUser("qc-user").Id.ToString("N")));
         fixture.QuickConnectMock.Setup(q => q.AuthorizeRequest(It.IsAny<Guid>(), It.IsAny<string>()))
             .ThrowsAsync(new NotSupportedException("surprise"));
 
@@ -288,7 +290,7 @@ public class CurrentUserClaimTests : IClassFixture<MockIdpFixture>
     {
         var fixture = new TestFixture(_idp);
         fixture.AddProvider();
-        SignIn(fixture.Controller, new System.Security.Claims.Claim("Jellyfin-UserId", Guid.NewGuid().ToString("N")));
+        SignIn(fixture.Controller, new System.Security.Claims.Claim("Jellyfin-UserId", fixture.UserStore.Inner.CreateUser("qc-user").Id.ToString("N")));
         fixture.QuickConnectMock.Setup(q => q.AuthorizeRequest(It.IsAny<Guid>(), It.IsAny<string>()))
             .ThrowsAsync(new MediaBrowser.Common.Extensions.ResourceNotFoundException("nope"));
 
@@ -304,6 +306,27 @@ public class CurrentUserClaimTests : IClassFixture<MockIdpFixture>
             new Jellyfin.Plugin.OIDC.Api.QuickConnectAuthorizeRequest { Code = "123456" }));
 
         Assert.Equal(429, blocked.StatusCode);
+        fixture.QuickConnectMock.Verify(
+            q => q.AuthorizeRequest(It.IsAny<Guid>(), It.IsAny<string>()), Times.Never);
+    }
+
+    /// <summary>
+    /// Jellyfin's authorization handler never checks IsDisabled, so a disabled account's still-live
+    /// token passes [Authorize]. It must not be able to sign a device in.
+    /// </summary>
+    [Fact]
+    public async Task DisabledCaller_CannotAuthorizeADevice()
+    {
+        var fixture = new TestFixture(_idp);
+        fixture.AddProvider();
+        var user = fixture.UserStore.Inner.CreateUser("qc-disabled");
+        user.SetPermission(PermissionKind.IsDisabled, true);
+        SignIn(fixture.Controller, new System.Security.Claims.Claim("Jellyfin-UserId", user.Id.ToString("N")));
+
+        var result = Assert.IsType<ObjectResult>(await fixture.Controller.QuickConnectAuthorize(
+            new Jellyfin.Plugin.OIDC.Api.QuickConnectAuthorizeRequest { Code = "123456" }));
+
+        Assert.Equal(403, result.StatusCode);
         fixture.QuickConnectMock.Verify(
             q => q.AuthorizeRequest(It.IsAny<Guid>(), It.IsAny<string>()), Times.Never);
     }

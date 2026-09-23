@@ -18,9 +18,6 @@ public sealed class OidcState
     public required string RedirectUri { get; init; }
     public DateTimeOffset CreatedAt { get; init; } = DateTimeOffset.UtcNow;
 
-    /// <summary>Set when initiating an account-linking flow for an already-authenticated Jellyfin user.</summary>
-    public Guid? LinkingForUserId { get; init; }
-
     /// <summary>
     /// True when this flow was started from the Quick Connect bridge, so the callback should render
     /// the code-entry page rather than hand the browser a web session. Deliberately a bare flag and
@@ -47,9 +44,6 @@ public sealed class AuthorizedSession
     public string Sid { get; init; } = string.Empty;
     public string[] Entitlements { get; init; } = Array.Empty<string>();
     public DateTimeOffset CreatedAt { get; init; } = DateTimeOffset.UtcNow;
-
-    /// <summary>Present when this session is for account linking rather than normal login.</summary>
-    public Guid? LinkUserId { get; init; }
 
     /// <summary>Email claim from the id_token (for AutoLinkByVerifiedEmail policy).</summary>
     public string? Email { get; init; }

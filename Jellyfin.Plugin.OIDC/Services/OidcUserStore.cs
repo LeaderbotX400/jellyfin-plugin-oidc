@@ -106,29 +106,37 @@ public class OidcUserStore : IDisposable
     public async Task UpsertAsync(OidcUserRecord record)
     {
         await EnsureLoadedAsync().ConfigureAwait(false);
-        ThrowIfUnrecoverable();
-        record.LastSyncedAt = DateTimeOffset.UtcNow;
-
-        // Upsert replaces the whole record, but callers build it from the claims of the login in
-        // hand and know nothing about the side-channel fields other code writes. Carry those
-        // forward when the incoming record leaves them at their defaults, so a login does not
-        // silently drop the back-channel-logout sid map or force a needless avatar re-download.
-        if (_records.TryGetValue(record.UserId, out var existing))
+        await _writeLock.WaitAsync().ConfigureAwait(false);
+        try
         {
-            if (record.Sids.Count == 0 && existing.Sids.Count > 0)
+            ThrowIfUnrecoverable();
+            record.LastSyncedAt = DateTimeOffset.UtcNow;
+
+            // Upsert replaces the whole record, but callers build it from the claims of the login in
+            // hand and know nothing about the side-channel fields other code writes. Carry those
+            // forward when the incoming record leaves them at their defaults, so a login does not
+            // silently drop the back-channel-logout sid map or force a needless avatar re-download.
+            if (_records.TryGetValue(record.UserId, out var existing))
             {
-                record.Sids = existing.Sids;
+                if (record.Sids.Count == 0 && existing.Sids.Count > 0)
+                {
+                    record.Sids = existing.Sids;
+                }
+
+                if (string.IsNullOrEmpty(record.ProfileImageSourceUrl))
+                {
+                    record.ProfileImageSourceUrl = existing.ProfileImageSourceUrl;
+                    record.ProfileImageHash = existing.ProfileImageHash;
+                }
             }
 
-            if (string.IsNullOrEmpty(record.ProfileImageSourceUrl))
-            {
-                record.ProfileImageSourceUrl = existing.ProfileImageSourceUrl;
-                record.ProfileImageHash = existing.ProfileImageHash;
-            }
+            _records[record.UserId] = record;
+            await PersistCoreAsync().ConfigureAwait(false);
         }
-
-        _records[record.UserId] = record;
-        await PersistAsync().ConfigureAwait(false);
+        finally
+        {
+            _writeLock.Release();
+        }
     }
 
     /// <summary>Returns the record for a Jellyfin user, or null if the user has never logged in via OIDC.</summary>
@@ -141,16 +149,24 @@ public class OidcUserStore : IDisposable
 
     /// <summary>
     /// Records which avatar URL the user's current profile image came from, and the hash of the
-    /// bytes written. Mutates in place rather than going through <see cref="UpsertAsync"/> because
-    /// the caller holds no claim snapshot — mirrors <see cref="RecordSidAsync"/>.
+    /// bytes written. Takes the write lock like every other mutation, so the change can never race
+    /// the serializer in <see cref="PersistCoreAsync"/>.
     /// </summary>
     public async Task RecordProfileImageAsync(Guid userId, string sourceUrl, string hash)
     {
         await EnsureLoadedAsync().ConfigureAwait(false);
-        if (!_records.TryGetValue(userId, out var record)) return;
-        record.ProfileImageSourceUrl = sourceUrl ?? string.Empty;
-        record.ProfileImageHash = hash ?? string.Empty;
-        await PersistAsync().ConfigureAwait(false);
+        await _writeLock.WaitAsync().ConfigureAwait(false);
+        try
+        {
+            if (!_records.TryGetValue(userId, out var record)) return;
+            record.ProfileImageSourceUrl = sourceUrl ?? string.Empty;
+            record.ProfileImageHash = hash ?? string.Empty;
+            await PersistCoreAsync().ConfigureAwait(false);
+        }
+        finally
+        {
+            _writeLock.Release();
+        }
     }
 
     public async Task<IReadOnlyList<OidcUserRecord>> GetAllAsync()
@@ -160,15 +176,30 @@ public class OidcUserStore : IDisposable
         return _records.Values.ToList();
     }
 
-    /// <summary>Records the OIDC `sid` claim against an existing user record, mapped to a session DeviceId.</summary>
+    /// <summary>
+    /// Records the OIDC `sid` claim against an existing user record, mapped to a session DeviceId.
+    /// The sid map is replaced rather than mutated: <see cref="GetBySidAsync"/> reads it without the
+    /// lock, and a plain Dictionary written during a concurrent read can throw or corrupt.
+    /// </summary>
     public async Task RecordSidAsync(Guid userId, string sid, string deviceId)
     {
         if (string.IsNullOrEmpty(sid)) return;
         await EnsureLoadedAsync().ConfigureAwait(false);
-        if (!_records.TryGetValue(userId, out var record)) return;
-        record.Sids ??= new Dictionary<string, string>();
-        record.Sids[sid] = deviceId ?? string.Empty;
-        await PersistAsync().ConfigureAwait(false);
+        await _writeLock.WaitAsync().ConfigureAwait(false);
+        try
+        {
+            if (!_records.TryGetValue(userId, out var record)) return;
+            var sids = record.Sids is null
+                ? new Dictionary<string, string>()
+                : new Dictionary<string, string>(record.Sids);
+            sids[sid] = deviceId ?? string.Empty;
+            record.Sids = sids;
+            await PersistCoreAsync().ConfigureAwait(false);
+        }
+        finally
+        {
+            _writeLock.Release();
+        }
     }
 
     public async Task<OidcUserRecord?> GetBySubAsync(string sub, string providerId)
@@ -205,26 +236,17 @@ public class OidcUserStore : IDisposable
     public async Task LinkAsync(Guid userId, string sub, string providerId)
     {
         await EnsureLoadedAsync().ConfigureAwait(false);
-        ThrowIfUnrecoverable();
-        _links[LinkKey(providerId, sub)] = userId;
-        await PersistAsync().ConfigureAwait(false);
-    }
-
-    /// <summary>Removes all links for a specific user+provider combination.</summary>
-    public async Task UnlinkAsync(Guid userId, string providerId)
-    {
-        await EnsureLoadedAsync().ConfigureAwait(false);
-        ThrowIfUnrecoverable();
-        var prefix = providerId.ToLowerInvariant() + ":";
-        foreach (var (key, uid) in _links)
+        await _writeLock.WaitAsync().ConfigureAwait(false);
+        try
         {
-            if (uid == userId && key.StartsWith(prefix, StringComparison.Ordinal))
-            {
-                _links.TryRemove(key, out _);
-            }
+            ThrowIfUnrecoverable();
+            _links[LinkKey(providerId, sub)] = userId;
+            await PersistCoreAsync().ConfigureAwait(false);
         }
-
-        await PersistAsync().ConfigureAwait(false);
+        finally
+        {
+            _writeLock.Release();
+        }
     }
 
     /// <summary>Returns all OIDC identities linked to a Jellyfin user.</summary>
@@ -236,14 +258,36 @@ public class OidcUserStore : IDisposable
         foreach (var (key, uid) in _links)
         {
             if (uid != userId) continue;
-            var sep = key.IndexOf(':', StringComparison.Ordinal);
-            if (sep > 0)
+            if (TrySplitLinkKey(key, out var providerId, out var sub))
             {
-                result.Add((key[..sep], key[(sep + 1)..]));
+                result.Add((providerId, sub));
             }
         }
 
         return result;
+    }
+
+    /// <summary>
+    /// Splits a "{providerId}:{sub}" link key. Provider ids are [A-Za-z0-9_-], so the first colon
+    /// ends them — except SAML providers, which are stored as "saml:{id}" and so carry one colon
+    /// of their own. Splitting SAML keys at the first colon reported every SAML link as provider
+    /// "saml", which no caller ever matched. Subs may contain colons and are left intact.
+    /// </summary>
+    internal static bool TrySplitLinkKey(string key, out string providerId, out string sub)
+    {
+        const string samlPrefix = "saml:";
+        var start = key.StartsWith(samlPrefix, StringComparison.Ordinal) ? samlPrefix.Length : 0;
+        var sep = key.IndexOf(':', start);
+        if (sep <= start)
+        {
+            providerId = string.Empty;
+            sub = string.Empty;
+            return false;
+        }
+
+        providerId = key[..sep];
+        sub = key[(sep + 1)..];
+        return true;
     }
 
     // ── Admin recovery ───────────────────────────────────────────────────────
@@ -384,9 +428,9 @@ public class OidcUserStore : IDisposable
         }
     }
 
-    private async Task PersistAsync()
+    /// <summary>Writes the store to disk. The caller MUST hold <see cref="_writeLock"/>.</summary>
+    private async Task PersistCoreAsync()
     {
-        await _writeLock.WaitAsync().ConfigureAwait(false);
         try
         {
             ThrowIfUnrecoverable();
@@ -433,10 +477,6 @@ public class OidcUserStore : IDisposable
         {
             _logger?.LogWarning(ex, "OidcUserStore: failed to persist store to '{Path}'", StorePath);
             throw;
-        }
-        finally
-        {
-            _writeLock.Release();
         }
     }
 

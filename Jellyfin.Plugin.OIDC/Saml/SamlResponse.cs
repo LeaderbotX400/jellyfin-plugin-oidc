@@ -16,6 +16,10 @@ namespace Jellyfin.Plugin.OIDC.Saml;
 public sealed class ParsedSamlAssertion
 {
     public string NameId { get; init; } = string.Empty;
+
+    /// <summary>The NameID element's Format attribute, or empty when absent.</summary>
+    public string NameIdFormat { get; init; } = string.Empty;
+
     public string[] Roles { get; init; } = Array.Empty<string>();
     public IReadOnlyDictionary<string, string[]> Attributes { get; init; } =
         new Dictionary<string, string[]>();
@@ -312,8 +316,9 @@ public static class SamlResponse
         var assertionNotOnOrAfter = ValidateConditions(signedAssertion, nsMgr, provider.EntityId);
 
         // ── Extract claims (anchored to the signed assertion only) ──────────────────────────
-        var nameId = signedAssertion.SelectSingleNode(
-            "./saml:Subject/saml:NameID", nsMgr)?.InnerText?.Trim() ?? string.Empty;
+        var nameIdElement = signedAssertion.SelectSingleNode("./saml:Subject/saml:NameID", nsMgr) as XmlElement;
+        var nameId = nameIdElement?.InnerText?.Trim() ?? string.Empty;
+        var nameIdFormat = nameIdElement?.GetAttribute("Format") ?? string.Empty;
 
         var attributes = new Dictionary<string, string[]>(StringComparer.OrdinalIgnoreCase);
         var attrNodes = signedAssertion.SelectNodes(
@@ -347,6 +352,7 @@ public static class SamlResponse
         return new ParsedSamlAssertion
         {
             NameId = nameId,
+            NameIdFormat = nameIdFormat,
             Roles = roles,
             Attributes = attributes,
             Issuer = assertionIssuer,
