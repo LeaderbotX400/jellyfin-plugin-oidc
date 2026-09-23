@@ -63,6 +63,7 @@ public class RbacServiceTests
             userManagerMock.Object,
             libraryManagerMock.Object,
             activityManagerMock.Object,
+            new Mock<MediaBrowser.Controller.Session.ISessionManager>().Object,
             configProvider,
             NullLogger<RbacService>.Instance);
 
@@ -325,5 +326,36 @@ public class RbacServiceTests
 
         Assert.True(GetPermission(frank, PermissionKind.IsAdministrator));
         Assert.True(GetPermission(frank, PermissionKind.EnableContentDeletion));
+    }
+
+    // ── Disabling through RBAC ends existing sessions ────────────────────────
+
+    [Theory]
+    [InlineData(false, 1)]
+    [InlineData(true, 0)]
+    public async Task Apply_DisabledEntitlement_RevokesSessionsOnlyOnTransition(bool alreadyDisabled, int expectedRevocations)
+    {
+        // Jellyfin's request authorization ignores IsDisabled, so the flag alone leaves live tokens.
+        var gina = MakeUser("gina");
+        gina.SetPermission(PermissionKind.IsDisabled, alreadyDisabled);
+        var config = new PluginConfiguration
+        {
+            Providers = new List<OidcProviderConfig> { new() { ProviderId = "idp", EnableEntitlements = true } }
+        };
+
+        var userManager = new Mock<IUserManager>();
+        userManager.Setup(m => m.GetUserById(gina.Id)).Returns(gina);
+        userManager.Setup(m => m.GetUsers()).Returns(new List<User> { gina }.AsQueryable());
+        var library = new Mock<ILibraryManager>();
+        library.Setup(m => m.GetVirtualFolders()).Returns(new List<MediaBrowser.Model.Entities.VirtualFolderInfo>());
+        var sessions = new Mock<MediaBrowser.Controller.Session.ISessionManager>();
+        var svc = new RbacService(
+            userManager.Object, library.Object, new Mock<IActivityManager>().Object, sessions.Object,
+            new TestPluginConfigProvider { Configuration = config }, NullLogger<RbacService>.Instance);
+
+        await svc.ApplyRoleMappingsAsync(gina.Id, Array.Empty<string>(), new[] { "jellyfin:disabled" }, "idp");
+
+        Assert.True(GetPermission(gina, PermissionKind.IsDisabled));
+        sessions.Verify(s => s.RevokeUserTokens(gina.Id, null), Times.Exactly(expectedRevocations));
     }
 }

@@ -71,6 +71,7 @@ internal sealed class TestFixture
             userManagerMock.Object,
             libraryManagerMock.Object,
             activityManagerMock.Object,
+            sessionManagerMock.Object,
             ConfigProvider,
             NullLogger<RbacService>.Instance);
 

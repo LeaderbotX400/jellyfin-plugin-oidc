@@ -66,7 +66,8 @@ public sealed class UserSyncServiceTests : IDisposable
         actMock.Setup(m => m.CreateAsync(It.IsAny<ActivityLog>()))
             .Returns(Task.CompletedTask);
 
-        _rbac = new RbacService(_users, libMock.Object, actMock.Object, _config, NullLogger<RbacService>.Instance);
+        _rbac = new RbacService(_users, libMock.Object, actMock.Object,
+            new Mock<MediaBrowser.Controller.Session.ISessionManager>().Object, _config, NullLogger<RbacService>.Instance);
         _sync = new UserSyncService(_users, _rbac, _store, _config, NullLogger<UserSyncService>.Instance);
 
         _config.Configuration.AutoCreateUsers = true;

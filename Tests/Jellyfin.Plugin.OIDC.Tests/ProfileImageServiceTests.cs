@@ -773,6 +773,7 @@ public sealed class ConfigSaveErrorSurfacingTests
                 new Mock<IUserManager>().Object,
                 new Mock<ILibraryManager>().Object,
                 new Mock<MediaBrowser.Model.Activity.IActivityManager>().Object,
+                new Mock<MediaBrowser.Controller.Session.ISessionManager>().Object,
                 new StubConfigProvider(),
                 NullLogger<RbacService>.Instance),
             new StubHttpClientFactory(),

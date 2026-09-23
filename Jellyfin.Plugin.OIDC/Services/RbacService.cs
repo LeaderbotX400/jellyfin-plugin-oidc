@@ -7,6 +7,7 @@ using Jellyfin.Database.Implementations.Entities;
 using Jellyfin.Database.Implementations.Enums;
 using Jellyfin.Plugin.OIDC.Configuration;
 using MediaBrowser.Controller.Library;
+using MediaBrowser.Controller.Session;
 using MediaBrowser.Model.Activity;
 using Microsoft.Extensions.Logging;
 using SyncPlayAccess = Jellyfin.Database.Implementations.Enums.SyncPlayUserAccessType;
@@ -18,6 +19,7 @@ public class RbacService
     private readonly IUserManager _userManager;
     private readonly ILibraryManager _libraryManager;
     private readonly IActivityManager _activityManager;
+    private readonly ISessionManager _sessionManager;
     private readonly IPluginConfigProvider _configProvider;
     private readonly ILogger<RbacService> _logger;
 
@@ -25,12 +27,14 @@ public class RbacService
         IUserManager userManager,
         ILibraryManager libraryManager,
         IActivityManager activityManager,
+        ISessionManager sessionManager,
         IPluginConfigProvider configProvider,
         ILogger<RbacService> logger)
     {
         _userManager = userManager;
         _libraryManager = libraryManager;
         _activityManager = activityManager;
+        _sessionManager = sessionManager;
         _configProvider = configProvider;
         _logger = logger;
     }
@@ -125,8 +129,23 @@ public class RbacService
             }
         }
 
+        var wasDisabled = user.HasPermission(PermissionKind.IsDisabled);
         ApplyToUser(user, preview, effectiveIsAdmin);
         await _userManager.UpdateUserAsync(user).ConfigureAwait(false);
+
+        // Jellyfin's per-request authorization never looks at IsDisabled, so setting the flag
+        // does not end the sessions the user already holds. When RBAC is what disabled them (the
+        // jellyfin:disabled entitlement, possibly from the resync task), revoke those tokens too.
+        if (!wasDisabled && user.HasPermission(PermissionKind.IsDisabled))
+        {
+            await _sessionManager.RevokeUserTokens(user.Id, null).ConfigureAwait(false);
+            await LogActivityAsync(
+                "OIDC-Auth disabled account",
+                "OidcAccountDisabled",
+                userId,
+                $"{user.Username} was disabled by an entitlement; existing sessions were revoked.",
+                Microsoft.Extensions.Logging.LogLevel.Warning).ConfigureAwait(false);
+        }
 
         string adminStr = preview.IsAdmin?.ToString() ?? "unchanged";
         string libsStr = preview.EnableAllLibraries switch
