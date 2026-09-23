@@ -29,7 +29,7 @@ public sealed class OidcState
     /// SHA-256 hash of the per-request CSRF token issued at /Start as a cookie. The /Callback
     /// handler re-reads the cookie and verifies SHA-256(cookie) == CsrfBindingHash using a
     /// fixed-time comparison. Null only when the state was constructed by flows that don't
-    /// bind a browser cookie (e.g. SAML, where RelayState already provides anti-replay binding).
+    /// bind a browser cookie (IdP-initiated SAML, which has no /Start).
     /// </summary>
     public byte[]? CsrfBindingHash { get; init; }
 }
@@ -57,6 +57,13 @@ public sealed class AuthorizedSession
     /// is created. Null when the provider has profile-image sync disabled or supplied no claim.
     /// </summary>
     public string? PictureUrl { get; init; }
+
+    /// <summary>
+    /// SHA-256 of the browser-binding cookie issued when the flow started, carried to /Auth for
+    /// flows whose return leg cannot see the cookie (the SAML ACS is a cross-site POST, which a
+    /// SameSite=Lax cookie does not ride). Null when no binding was issued (IdP-initiated SAML).
+    /// </summary>
+    public byte[]? CsrfBindingHash { get; init; }
 }
 
 public sealed class StateManager : IHostedService, IDisposable
@@ -64,6 +71,9 @@ public sealed class StateManager : IHostedService, IDisposable
     private static readonly TimeSpan StateExpiry = TimeSpan.FromMinutes(10);
     private static readonly TimeSpan SessionExpiry = TimeSpan.FromMinutes(5);
     private static readonly TimeSpan CleanupInterval = TimeSpan.FromMinutes(2);
+
+    /// <summary>Upper bound on in-flight logins. Far above any household or small-org load.</summary>
+    internal const int MaxPendingStates = 10_000;
 
     private readonly ConcurrentDictionary<string, OidcState> _pendingStates = new(StringComparer.Ordinal);
     private readonly ConcurrentDictionary<string, AuthorizedSession> _authorizedSessions = new(StringComparer.Ordinal);
@@ -102,8 +112,29 @@ public sealed class StateManager : IHostedService, IDisposable
         return SHA256.HashData(Encoding.UTF8.GetBytes(token));
     }
 
-    public string StoreState(OidcState state)
+    /// <summary>
+    /// Stores the state for a flow that is about to leave for the IdP, returning its opaque key,
+    /// or null when the store is full.
+    ///
+    /// /Start is anonymous and every call adds an entry that lives for 10 minutes, so without a
+    /// bound anyone can grow this dictionary until the server runs out of memory. At the cap,
+    /// expired entries are swept first; if it is still full the caller refuses (503) rather than
+    /// evicting live entries, which would let a flood cancel real users' in-flight logins.
+    /// </summary>
+    public string? StoreState(OidcState state)
     {
+        if (_pendingStates.Count >= MaxPendingStates)
+        {
+            Cleanup();
+            if (_pendingStates.Count >= MaxPendingStates)
+            {
+                _logger.LogWarning(
+                    "Refusing to start an SSO login: {Count} pending sign-ins already in flight (cap {Cap})",
+                    _pendingStates.Count, MaxPendingStates);
+                return null;
+            }
+        }
+
         var key = GenerateCsprngToken();
         _pendingStates[key] = state;
         return key;

@@ -300,4 +300,38 @@ public class StateManagerTests
         var sm = Create();
         Assert.Null(sm.ConsumeAuthorizedSession(token!));
     }
+
+    [Fact]
+    public void StoreState_AtCapacity_RefusesInsteadOfGrowing()
+    {
+        // /Start is anonymous; an unbounded store lets anyone exhaust server memory.
+        var sm = Create();
+        for (var i = 0; i < StateManager.MaxPendingStates; i++)
+        {
+            Assert.NotNull(sm.StoreState(NewState()));
+        }
+
+        Assert.Null(sm.StoreState(NewState()));
+    }
+
+    [Fact]
+    public void StoreState_AtCapacity_SweepsExpiredEntriesFirst()
+    {
+        var sm = Create();
+        for (var i = 0; i < StateManager.MaxPendingStates; i++)
+        {
+            sm.StoreState(NewState(DateTimeOffset.UtcNow.AddHours(-1)));
+        }
+
+        Assert.NotNull(sm.StoreState(NewState()));
+    }
+
+    private static OidcState NewState(DateTimeOffset? createdAt = null) => new()
+    {
+        ProviderId = "p",
+        Nonce = "n",
+        CodeVerifier = "v",
+        RedirectUri = "https://example.com/cb",
+        CreatedAt = createdAt ?? DateTimeOffset.UtcNow
+    };
 }

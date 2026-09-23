@@ -1,6 +1,5 @@
 using System;
 using System.Linq;
-using System.Text.Json;
 using System.Threading.Tasks;
 using Jellyfin.Plugin.OIDC;
 using Jellyfin.Plugin.OIDC.Configuration;
@@ -76,8 +75,17 @@ public class SamlController : ControllerBase
             ProviderId = "saml:" + providerId,
             Nonce = requestId,
             CodeVerifier = string.Empty,
-            RedirectUri = acsUrl
+            RedirectUri = acsUrl,
+            // Login-CSRF binding. It cannot be checked at the ACS, a cross-site POST that a
+            // SameSite=Lax cookie does not ride, so it travels with the session to /Auth — a
+            // same-origin fetch from the callback page — and is verified there.
+            CsrfBindingHash = BrowserBindingCookie.Issue(Request, Response, BindingKey(provider))
         });
+
+        if (stateKey is null)
+        {
+            return StatusCode(503, "Too many sign-ins in progress. Try again in a few minutes.");
+        }
 
         var redirectUrl = SamlRequest.BuildRedirectUrl(provider, acsUrl, requestId, relayState: stateKey);
         return Redirect(redirectUrl);
@@ -127,14 +135,17 @@ public class SamlController : ControllerBase
         // the ExpectedInResponseTo stays null and the response's InResponseTo (if any) must also
         // be absent.
         string? expectedInResponseTo = null;
+        byte[]? csrfBindingHash = null;
         if (!string.IsNullOrEmpty(relayState))
         {
             var samlState = _stateManager.ConsumeState(relayState);
-            if (samlState == null)
+            if (samlState == null
+                || !string.Equals(samlState.ProviderId, "saml:" + provider.Id, StringComparison.OrdinalIgnoreCase))
             {
                 return BadRequest("Invalid or expired relay state. Please try again.");
             }
             expectedInResponseTo = samlState.Nonce;
+            csrfBindingHash = samlState.CsrfBindingHash;
         }
         else if (!provider.AllowIdpInitiated)
         {
@@ -222,23 +233,15 @@ public class SamlController : ControllerBase
             Username = username,
             Sub = assertion.NameId,
             Roles = assertion.Roles,
-            Entitlements = Array.Empty<string>()
+            Entitlements = Array.Empty<string>(),
+            CsrfBindingHash = csrfBindingHash
         });
 
-        SetCallbackSecurityHeaders();
-        return Content(BuildCallbackHtml(sessionToken, providerId), "text/html");
-    }
-
-    private void SetCallbackSecurityHeaders()
-    {
-        // See OidcController.SetCallbackSecurityHeaders for the full rationale on 'unsafe-inline'.
-        // frame-ancestors 'none' + X-Frame-Options: DENY stop the callback page from being framed,
-        // which would otherwise expose the in-page session token to a clickjacking/embedding attacker.
-        Response.Headers["Content-Security-Policy"] =
-            "default-src 'none'; script-src 'unsafe-inline'; connect-src 'self'; style-src 'unsafe-inline'; frame-ancestors 'none'";
-        Response.Headers["X-Content-Type-Options"] = "nosniff";
-        Response.Headers["Referrer-Policy"] = "no-referrer";
-        Response.Headers["X-Frame-Options"] = "DENY";
+        SsoPages.SetSecurityHeaders(Response);
+        return Content(
+            SsoPages.BuildCompletionHtml(
+                sessionToken, "/sso/SAML/Auth/" + providerId, "/", "Completing SAML authentication..."),
+            "text/html");
     }
 
     /// <summary>Completes SAML authentication by exchanging the session token for a Jellyfin auth token.</summary>
@@ -255,6 +258,27 @@ public class SamlController : ControllerBase
         if (!string.Equals(session.ProviderId, expectedProviderId, StringComparison.OrdinalIgnoreCase))
         {
             return BadRequest("Provider mismatch");
+        }
+
+        // SP-initiated flows must finish in the browser that started them. Without this, an
+        // attacker could complete their own SAML login and have the victim's browser POST the
+        // response, signing the victim into the attacker's account (login-CSRF). IdP-initiated
+        // flows carry no binding: they have no /Start, which is why AllowIdpInitiated is opt-in.
+        var provider = GetProvider(providerId);
+        if (provider is null)
+        {
+            return NotFound($"SAML provider '{providerId}' not found or disabled");
+        }
+
+        if (session.CsrfBindingHash is not null
+            && !BrowserBindingCookie.VerifyAndClear(Request, Response, BindingKey(provider), session.CsrfBindingHash))
+        {
+            _logger.LogWarning("SAML login rejected: browser binding cookie missing or invalid (provider={Provider})", providerId);
+            await _rbacService.LogActivityAsync(
+                "SAML login rejected: browser binding cookie missing or invalid",
+                "SamlLoginFailure", Guid.Empty, $"provider={providerId}",
+                Microsoft.Extensions.Logging.LogLevel.Warning).ConfigureAwait(false);
+            return BadRequest("Authentication session not initiated by this browser. Please start sign-in again.");
         }
 
         try
@@ -363,78 +387,10 @@ public class SamlController : ControllerBase
         return $"{scheme}://{host}/sso/SAML/ACS/{providerId}";
     }
 
-    private static string BuildCallbackHtml(string sessionToken, string providerId)
-    {
-        // Every value that crosses into the <script> body is JSON-encoded. JsonSerializer
-        // produces a valid JS string literal, so even a provider id with hostile characters
-        // cannot break out of the literal. Mirrors OidcController.BuildCallbackHtml.
-        var encodedToken = JsonSerializer.Serialize(sessionToken);
-        var encodedProvider = JsonSerializer.Serialize(providerId);
-        var appVersion = OidcPlugin.Instance?.Version?.ToString() ?? "0.0.0";
-        var encodedVersion = JsonSerializer.Serialize(appVersion);
-        return $$"""
-        <!DOCTYPE html>
-        <html>
-        <head><title>Authenticating...</title></head>
-        <body>
-        <h3>Completing SAML authentication...</h3>
-        <p id="status">Please wait...</p>
-        <script>
-        (function() {
-            const token = {{encodedToken}};
-            const providerId = {{encodedProvider}};
-
-            const deviceId = localStorage.getItem('_deviceId2') || crypto.randomUUID();
-            localStorage.setItem('_deviceId2', deviceId);
-
-            fetch('/sso/SAML/Auth/' + encodeURIComponent(providerId), {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({
-                    Token: token,
-                    DeviceId: deviceId,
-                    DeviceName: navigator.userAgent.substring(0, 50),
-                    App: 'Jellyfin Web',
-                    AppVersion: {{encodedVersion}}
-                })
-            })
-            .then(function(r) {
-                if (r.status === 409 || r.status === 403) {
-                    return r.json().then(function(body) {
-                        throw new Error(body && body.message ? body.message : 'Account collision');
-                    });
-                }
-                if (!r.ok) throw new Error('Auth failed: ' + r.status);
-                return r.json();
-            })
-            .then(function(auth) {
-                var credentials = {
-                    Servers: [{
-                        ManualAddress: window.location.origin,
-                        AccessToken: auth.AccessToken,
-                        UserId: auth.User.Id,
-                        IsLocalUser: true
-                    }]
-                };
-                localStorage.setItem('jellyfin_credentials', JSON.stringify(credentials));
-
-                var user = {
-                    Id: auth.User.Id,
-                    ServerId: auth.ServerId,
-                    AccessToken: auth.AccessToken
-                };
-                localStorage.setItem('_jellyfin_user_' + auth.ServerId, JSON.stringify(user));
-
-                document.getElementById('status').textContent = 'Success! Redirecting...';
-                window.location.href = '/';
-            })
-            .catch(function(err) {
-                document.getElementById('status').textContent = 'Error: ' + err.message;
-            });
-        })();
-        </script>
-        </body>
-        </html>
-        """;
-    }
+    /// <summary>
+    /// Cookie key for the SAML browser binding. Uses the configured id (validated to
+    /// [A-Za-z0-9_-]) rather than the URL segment, whose casing may differ between legs, and a
+    /// prefix so it can never collide with an OIDC provider of the same id.
+    /// </summary>
+    private static string BindingKey(SamlProviderConfig provider) => "saml-" + provider.Id;
 }

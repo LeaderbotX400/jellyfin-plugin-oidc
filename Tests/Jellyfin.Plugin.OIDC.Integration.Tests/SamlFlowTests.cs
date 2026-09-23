@@ -14,6 +14,7 @@ using Jellyfin.Plugin.OIDC.Api;
 using Jellyfin.Plugin.OIDC.Configuration;
 using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Mvc;
+using Moq;
 using Xunit;
 
 namespace Jellyfin.Plugin.OIDC.Integration.Tests;
@@ -64,6 +65,8 @@ public sealed class SamlFlowTests : IClassFixture<MockIdpFixture>
         string? email = null, string assertionId = "_assert1",
         string nameIdFormat = "urn:oasis:names:tc:SAML:1.1:nameid-format:unspecified")
     {
+        // An empty requestId builds an IdP-initiated response: no InResponseTo anywhere.
+        var inResponseTo = requestId.Length == 0 ? string.Empty : $" InResponseTo=\"{requestId}\"";
         var groupValues = string.Join(string.Empty,
             roles.Select(r => $"<saml:AttributeValue>{r}</saml:AttributeValue>"));
         var emailAttr = email == null
@@ -72,7 +75,7 @@ public sealed class SamlFlowTests : IClassFixture<MockIdpFixture>
 
         var xml =
             $"<samlp:Response xmlns:samlp=\"urn:oasis:names:tc:SAML:2.0:protocol\" xmlns:saml=\"urn:oasis:names:tc:SAML:2.0:assertion\" " +
-            $"ID=\"_resp1\" Version=\"2.0\" IssueInstant=\"2025-01-01T00:00:00Z\" Destination=\"{AcsUrl}\" InResponseTo=\"{requestId}\">" +
+            $"ID=\"_resp1\" Version=\"2.0\" IssueInstant=\"2025-01-01T00:00:00Z\" Destination=\"{AcsUrl}\"{inResponseTo}>" +
             $"<saml:Issuer>{IdpEntityId}</saml:Issuer>" +
             "<samlp:Status><samlp:StatusCode Value=\"urn:oasis:names:tc:SAML:2.0:status:Success\"/></samlp:Status>" +
             $"<saml:Assertion ID=\"{assertionId}\" Version=\"2.0\" IssueInstant=\"2025-01-01T00:00:00Z\">" +
@@ -80,7 +83,7 @@ public sealed class SamlFlowTests : IClassFixture<MockIdpFixture>
             "<saml:Subject>" +
             $"<saml:NameID Format=\"{nameIdFormat}\">{nameId}</saml:NameID>" +
             "<saml:SubjectConfirmation Method=\"urn:oasis:names:tc:SAML:2.0:cm:bearer\">" +
-            $"<saml:SubjectConfirmationData Recipient=\"{AcsUrl}\" InResponseTo=\"{requestId}\" NotOnOrAfter=\"2099-12-31T23:59:59Z\"/>" +
+            $"<saml:SubjectConfirmationData Recipient=\"{AcsUrl}\"{inResponseTo} NotOnOrAfter=\"2099-12-31T23:59:59Z\"/>" +
             "</saml:SubjectConfirmation>" +
             "</saml:Subject>" +
             "<saml:Conditions NotBefore=\"2020-01-01T00:00:00Z\" NotOnOrAfter=\"2099-12-31T23:59:59Z\">" +
@@ -121,6 +124,8 @@ public sealed class SamlFlowTests : IClassFixture<MockIdpFixture>
     {
         var startResult = fixture.SamlController.Start(ProviderId);
         var redirect = Assert.IsType<RedirectResult>(startResult);
+        // The browser keeps the binding cookie /Start set and presents it to /Auth.
+        TestFixture.PropagateCookies(fixture.SamlController);
         var qs = HttpUtility.ParseQueryString(new Uri(redirect.Url).Query);
         var relayState = qs["RelayState"]!;
         // The state manager stashed the request ID as Nonce under the relayState key; we can read
@@ -372,6 +377,63 @@ public sealed class SamlFlowTests : IClassFixture<MockIdpFixture>
         var headers = fixture.SamlController.ControllerContext.HttpContext.Response.Headers;
         Assert.Equal("DENY", headers["X-Frame-Options"].ToString());
         Assert.Contains("frame-ancestors 'none'", headers["Content-Security-Policy"].ToString());
+    }
+
+    // ── Login-CSRF binding ──────────────────────────────────────────────────
+
+    [Fact]
+    public async Task AuthFlow_ResponseCompletedInADifferentBrowser_IsRejected()
+    {
+        // The attacker starts a flow and logs in as themselves; the victim's browser (which never
+        // hit /Start, so holds no binding cookie) is made to POST the response. It must not end up
+        // signed in to the attacker's account.
+        var fixture = new TestFixture(_idp);
+        AddSignedSamlProvider(fixture);
+        var (relayState, requestId) = InitiateSpFlow(fixture);
+        fixture.SamlController.ControllerContext.HttpContext.Request.Headers.Remove("Cookie");
+
+        var content = Assert.IsType<ContentResult>(await fixture.SamlController.AssertionConsumerService(
+            ProviderId, BuildAndSignResponse("attacker", new[] { "user" }, requestId), relayState));
+        var result = await fixture.SamlController.Authenticate(
+            ProviderId, new AuthenticateRequest { Token = ExtractSessionToken(content) });
+
+        Assert.IsType<BadRequestObjectResult>(result);
+        fixture.SessionManagerMock.Verify(
+            s => s.AuthenticateDirect(It.IsAny<MediaBrowser.Controller.Session.AuthenticationRequest>()), Times.Never);
+    }
+
+    [Fact]
+    public async Task AuthFlow_IdpInitiated_NeedsNoBindingCookie()
+    {
+        // IdP-initiated flows have no /Start, so there is nothing to bind to; they remain allowed
+        // when (and only when) the provider opts in.
+        var fixture = new TestFixture(_idp);
+        AddSignedSamlProvider(fixture).AllowIdpInitiated = true;
+
+        var content = Assert.IsType<ContentResult>(await fixture.SamlController.AssertionConsumerService(
+            ProviderId, BuildAndSignResponse("idp-user", new[] { "user" }, requestId: ""), relayState: null));
+        var result = await fixture.SamlController.Authenticate(
+            ProviderId, new AuthenticateRequest { Token = ExtractSessionToken(content) });
+
+        Assert.IsType<OkObjectResult>(result);
+    }
+
+    [Fact]
+    public async Task AcsCallback_PageIsNotCacheable_AndSurvivesInsecureContext()
+    {
+        var fixture = new TestFixture(_idp);
+        AddSignedSamlProvider(fixture);
+        var (relayState, requestId) = InitiateSpFlow(fixture);
+
+        var content = Assert.IsType<ContentResult>(await fixture.SamlController.AssertionConsumerService(
+            ProviderId, BuildAndSignResponse("cache-user", new[] { "user" }, requestId), relayState));
+
+        var headers = fixture.SamlController.ControllerContext.HttpContext.Response.Headers;
+        Assert.Equal("no-store", headers["Cache-Control"].ToString());
+        // The SAML page used to call crypto.randomUUID() unguarded, which is undefined on a plain-HTTP
+        // LAN origin and stranded the login.
+        Assert.Contains("getRandomValues", content.Content, StringComparison.Ordinal);
+        Assert.Contains("\"/sso/SAML/Auth/" + ProviderId + "\"", content.Content, StringComparison.Ordinal);
     }
 
     private static string ExtractAcsUrl(string deflatedBase64)

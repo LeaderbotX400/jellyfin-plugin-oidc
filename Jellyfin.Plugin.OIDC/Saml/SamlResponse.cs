@@ -167,6 +167,15 @@ public static class SamlResponse
         if (string.Equals(signedRoot.LocalName, "Response", StringComparison.Ordinal) &&
             string.Equals(signedRoot.NamespaceURI, ProtocolNs, StringComparison.Ordinal))
         {
+            // The Response-level checks below (Status, Destination, InResponseTo, Issuer) read
+            // the document's root Response. A signed Response nested inside an unsigned wrapper
+            // would pass the signature check while those checks read the attacker's wrapper.
+            if (!ReferenceEquals(signedRoot, doc.DocumentElement))
+            {
+                throw new InvalidOperationException(
+                    "SAML response: the signed Response is not the document's root element (possible signature-wrapping attack).");
+            }
+
             // Signed root is the Response; its lone child Assertion is what we'll consume.
             signedAssertion = (XmlElement)assertionNodes[0]!;
             // Anchor: ensure the assertion is a direct descendant of the signed Response.

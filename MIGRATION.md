@@ -40,6 +40,19 @@ without realising it.
   every stored SSO user using the roles recorded at their last login. Deployments with no role
   mappings at all are unaffected. The last-admin guard still applies.
 
+### SAML and callback hardening
+
+- **SAML sign-ins must finish in the browser that started them.** `/sso/SAML/Start` now sets
+  the same browser-binding cookie the OIDC flow uses, and `/sso/SAML/Auth` checks it. This
+  closes login-CSRF, where an attacker's SAML response is POSTed from a victim's browser.
+  IdP-initiated SSO (`AllowIdpInitiated`) has no /Start and is unchanged.
+- **A signed SAML Response must be the document root.** A signed Response nested inside an
+  unsigned wrapper used to be accepted, with the Response-level checks reading the wrapper.
+- The SAML completion page gained the plain-HTTP device-id fallback the OIDC page already had.
+  Both pages, and the Quick Connect page, now send `Cache-Control: no-store`.
+- `/Start` refuses with 503 when 10,000 sign-ins are already in flight, instead of growing
+  memory without bound.
+
 ## v1.0.0 — Jellyfin 12
 
 ### What changed

@@ -133,9 +133,7 @@ public class OidcController : ControllerBase
         // and emit the raw token as a strict cookie. The /Callback handler must read the
         // cookie back and prove possession before accepting the OIDC response — this prevents
         // login-CSRF (an attacker forcing a victim's browser to complete the attacker's flow).
-        var csrfToken = StateManager.GenerateCsprngToken();
-        var csrfHash = StateManager.HashToken(csrfToken);
-        SetCsrfBindingCookie(providerId, csrfToken);
+        var csrfHash = BrowserBindingCookie.Issue(Request, Response, providerId);
 
         var state = new OidcState
         {
@@ -148,6 +146,10 @@ public class OidcController : ControllerBase
         };
 
         var stateKey = _stateManager.StoreState(state);
+        if (stateKey is null)
+        {
+            return StatusCode(503, "Too many sign-ins in progress. Try again in a few minutes.");
+        }
 
         var authorizeUrl = new RequestUrl(disco.AuthorizeEndpoint!);
         var url = authorizeUrl.CreateAuthorizeUrl(
@@ -227,7 +229,7 @@ public class OidcController : ControllerBase
 
         // Verify the per-request CSRF cookie that /Start set. Missing or mismatched cookie
         // means this callback wasn't initiated by this browser session — reject.
-        if (!VerifyAndClearCsrfBindingCookie(providerId, oidcState))
+        if (!BrowserBindingCookie.VerifyAndClear(Request, Response, providerId, oidcState.CsrfBindingHash))
         {
             _logger.LogWarning("OIDC callback rejected: missing or invalid CSRF binding cookie for provider {Provider}", providerId);
             await _rbacService.LogActivityAsync(
@@ -516,7 +518,7 @@ public class OidcController : ControllerBase
         });
 
         _rateLimiter.RecordSuccess(remoteIp);
-        SetCallbackSecurityHeaders();
+        SsoPages.SetSecurityHeaders(Response);
 
         // Quick Connect bridge: instead of establishing a web session and bouncing to /web, hand
         // the browser a page that exchanges the session token for a Jellyfin token and then asks
@@ -526,7 +528,10 @@ public class OidcController : ControllerBase
             return Content(BuildQuickConnectHtml(sessionToken, providerId, PluginBasePath()), "text/html");
         }
 
-        return Content(BuildCallbackHtml(sessionToken, providerId), "text/html");
+        return Content(
+            SsoPages.BuildCompletionHtml(
+                sessionToken, "/sso/OIDC/Auth/" + providerId, "/", "Completing authentication..."),
+            "text/html");
     }
 
     /// <summary>
@@ -740,7 +745,7 @@ public class OidcController : ControllerBase
     public ActionResult QuickConnectLanding()
     {
         var providers = _configProvider.GetConfiguration().Providers.Where(p => p.Enabled).ToList();
-        SetCallbackSecurityHeaders();
+        SsoPages.SetSecurityHeaders(Response);
         return Content(BuildQuickConnectLandingHtml(providers, _quickConnect.IsEnabled, PluginBasePath()), "text/html");
     }
 
@@ -1004,86 +1009,6 @@ public class OidcController : ControllerBase
         return new Parameters(pairs);
     }
 
-    // Cookie configuration:
-    //   * On HTTPS we use the `__Host-` prefix — browsers enforce Secure + Path=/ + no Domain,
-    //     making cookie injection from a sibling subdomain impossible.
-    //   * On plain HTTP (dev only) the `__Host-` prefix would be rejected by the browser
-    //     because Secure must be set, so we drop the prefix. This is documented in README and
-    //     is acceptable because the entire login flow is already insecure over HTTP.
-    private const string CsrfCookieSuffix = "oidc-csrf";
-
-    private string GetCsrfCookieName(string providerId)
-    {
-        // Provider id charset is validated (A-Za-z0-9_-) so safe to splice into a cookie name.
-        var prefix = Request.IsHttps ? "__Host-" : string.Empty;
-        return $"{prefix}{CsrfCookieSuffix}-{providerId}";
-    }
-
-    private void SetCsrfBindingCookie(string providerId, string token)
-    {
-        var opts = new Microsoft.AspNetCore.Http.CookieOptions
-        {
-            HttpOnly = true,
-            Secure = Request.IsHttps,
-            SameSite = Microsoft.AspNetCore.Http.SameSiteMode.Lax,
-            Path = "/",
-            // Lifetime mirrors the server-side state expiry. The cookie is single-use; the
-            // /Callback handler clears it on success or on hash mismatch.
-            MaxAge = TimeSpan.FromMinutes(10)
-        };
-        Response.Cookies.Append(GetCsrfCookieName(providerId), token, opts);
-    }
-
-    private bool VerifyAndClearCsrfBindingCookie(string providerId, OidcState state)
-    {
-        var cookieName = GetCsrfCookieName(providerId);
-        var present = Request.Cookies.TryGetValue(cookieName, out var raw);
-
-        // Always clear the cookie post-callback so a stale token can't be replayed.
-        var clearOpts = new Microsoft.AspNetCore.Http.CookieOptions
-        {
-            HttpOnly = true,
-            Secure = Request.IsHttps,
-            SameSite = Microsoft.AspNetCore.Http.SameSiteMode.Lax,
-            Path = "/"
-        };
-        Response.Cookies.Delete(cookieName, clearOpts);
-
-        if (state.CsrfBindingHash == null)
-        {
-            // No binding was issued (legacy state path or test). Reject to be safe.
-            return false;
-        }
-
-        if (!present || string.IsNullOrEmpty(raw))
-        {
-            return false;
-        }
-
-        var presented = StateManager.HashToken(raw!);
-        return CryptographicOperations.FixedTimeEquals(presented, state.CsrfBindingHash);
-    }
-
-    private void SetCallbackSecurityHeaders()
-    {
-        // The callback HTML must run a small bootstrap script that hands the session token
-        // back to /Auth and writes Jellyfin's localStorage credentials. We pin everything else
-        // off (no <img>, no external CSS, no XHR to other origins). The 'unsafe-inline' on
-        // script-src is regrettable but mandated by Jellyfin's plugin embedding model — we
-        // cannot ship a separate JS file with a hash-pinned <script src>. Defense-in-depth
-        // here is the value-side hardening: every interpolation is JSON-encoded and the
-        // provider id charset is validated at config-save time.
-        Response.Headers["Content-Security-Policy"] =
-            "default-src 'none'; script-src 'unsafe-inline'; connect-src 'self'; style-src 'unsafe-inline'; frame-ancestors 'none'";
-        Response.Headers["X-Content-Type-Options"] = "nosniff";
-        Response.Headers["Referrer-Policy"] = "no-referrer";
-        Response.Headers["X-Frame-Options"] = "DENY";
-    }
-
-    /// <summary>
-    /// Landing page for the Quick Connect bridge — a provider picker. Kept deliberately plain so
-    /// it is legible when read off a TV screen and typed into a phone.
-    /// </summary>
     /// <summary>
     /// Absolute path prefix for this plugin's routes, honouring a configured Jellyfin base URL.
     ///
@@ -1099,6 +1024,10 @@ public class OidcController : ControllerBase
         return pathBase + "/sso/OIDC/";
     }
 
+    /// <summary>
+    /// Landing page for the Quick Connect bridge — a provider picker. Kept deliberately plain so
+    /// it is legible when read off a TV screen and typed into a phone.
+    /// </summary>
     internal static string BuildQuickConnectLandingHtml(
         IReadOnlyList<OidcProviderConfig> providers, bool quickConnectEnabled, string basePath)
     {
@@ -1313,106 +1242,6 @@ public class OidcController : ControllerBase
                    .Replace(">", "&gt;", StringComparison.Ordinal)
                    .Replace("\"", "&quot;", StringComparison.Ordinal)
                    .Replace("'", "&#39;", StringComparison.Ordinal);
-
-    private static string BuildCallbackHtml(string sessionToken, string providerId)
-    {
-        // Every value that crosses into the <script> body is JSON-encoded. JsonSerializer
-        // produces a valid JS string literal (single tokens like </script> are escaped as
-        // </script>, etc.). This is the defence even if a provider id with hostile
-        // characters somehow bypassed the regex at the config layer.
-        var encodedToken = JsonSerializer.Serialize(sessionToken);
-        var encodedProvider = JsonSerializer.Serialize(providerId);
-        // Use the actual plugin version rather than a hardcoded string so Jellyfin's
-        // session table shows the real plugin version. Falls back to "0.0.0" when
-        // running outside the Jellyfin host (e.g. unit tests).
-        var appVersion = OidcPlugin.Instance?.Version?.ToString() ?? "0.0.0";
-        var encodedVersion = JsonSerializer.Serialize(appVersion);
-        return $$"""
-        <!DOCTYPE html>
-        <html>
-        <head><title>Authenticating...</title></head>
-        <body>
-        <h3>Completing authentication...</h3>
-        <p id="status">Please wait...</p>
-        <script>
-        (function() {
-            const token = {{encodedToken}};
-            const providerId = {{encodedProvider}};
-
-            // crypto.randomUUID() is secure-context only. A Jellyfin served over plain HTTP at a
-            // non-localhost address — a LAN install on http://10.0.0.5:8096, say — has no secure
-            // context, randomUUID is undefined, and this line used to throw and strand the login
-            // on "Completing authentication...". crypto.getRandomValues has no such restriction.
-            function newDeviceId() {
-                if (crypto && typeof crypto.randomUUID === 'function') {
-                    return crypto.randomUUID();
-                }
-                if (crypto && typeof crypto.getRandomValues === 'function') {
-                    const b = new Uint8Array(16);
-                    crypto.getRandomValues(b);
-                    b[6] = (b[6] & 0x0f) | 0x40;  // version 4
-                    b[8] = (b[8] & 0x3f) | 0x80;  // variant 10x
-                    const h = Array.from(b, x => x.toString(16).padStart(2, '0')).join('');
-                    return h.slice(0, 8) + '-' + h.slice(8, 12) + '-' + h.slice(12, 16) + '-' +
-                           h.slice(16, 20) + '-' + h.slice(20);
-                }
-                // Last resort: this is a device label for the session list, not a secret.
-                return 'oidc-' + Date.now().toString(16) + '-' + Math.random().toString(16).slice(2, 10);
-            }
-
-            const deviceId = localStorage.getItem('_deviceId2') || newDeviceId();
-            localStorage.setItem('_deviceId2', deviceId);
-
-            fetch('/sso/OIDC/Auth/' + encodeURIComponent(providerId), {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({
-                    Token: token,
-                    DeviceId: deviceId,
-                    DeviceName: navigator.userAgent.substring(0, 50),
-                    App: 'Jellyfin Web',
-                    AppVersion: {{encodedVersion}}
-                })
-            })
-            .then(function(r) {
-                if (r.status === 409 || r.status === 403) {
-                    return r.json().then(function(body) {
-                        throw new Error(body && body.message ? body.message : 'Account collision');
-                    });
-                }
-                if (!r.ok) throw new Error('Auth failed: ' + r.status);
-                return r.json();
-            })
-            .then(function(auth) {
-                var credentials = {
-                    Servers: [{
-                        ManualAddress: window.location.origin,
-                        AccessToken: auth.AccessToken,
-                        UserId: auth.User.Id,
-                        IsLocalUser: true
-                    }]
-                };
-                localStorage.setItem('jellyfin_credentials', JSON.stringify(credentials));
-
-                var user = {
-                    Id: auth.User.Id,
-                    ServerId: auth.ServerId,
-                    AccessToken: auth.AccessToken
-                };
-                localStorage.setItem('_jellyfin_user_' + auth.ServerId, JSON.stringify(user));
-
-                document.getElementById('status').textContent = 'Success! Redirecting...';
-                window.location.href = '/';
-            })
-            .catch(function(err) {
-                document.getElementById('status').textContent = 'Error: ' + err.message;
-            });
-        })();
-        </script>
-        </body>
-        </html>
-        """;
-    }
 }
 
 public class AuthenticateRequest
