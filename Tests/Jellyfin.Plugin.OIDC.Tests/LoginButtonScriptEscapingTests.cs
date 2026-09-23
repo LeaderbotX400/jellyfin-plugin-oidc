@@ -160,6 +160,20 @@ public class LoginButtonScriptEscapingTests
     }
 
     [Fact]
+    public void Script_TargetsOnlyTheLoginForm_AndRemovesStaleButtons()
+    {
+        // Regression: a generic "[data-role=page] form" fallback matched item detail pages, so the
+        // buttons appeared after sign-in. Only the login view's form may be targeted.
+        var script = GetScript(MakeController("IdP", "#000"));
+
+        Assert.DoesNotContain("[data-role=\"page\"] form", script);
+        Assert.DoesNotContain("#loginPage form", script);
+        Assert.Contains(".manualLoginForm", script);
+        Assert.Contains("closest('.hide')", script);
+        Assert.Contains("existing.remove()", script);
+    }
+
+    [Fact]
     public void BenignInputs_ProduceValidJavaScript()
     {
         // Verify that ordinary inputs still produce syntactically correct JS
