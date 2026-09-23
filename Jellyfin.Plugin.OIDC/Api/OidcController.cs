@@ -525,12 +525,17 @@ public class OidcController : ControllerBase
         // for the code shown on the native device.
         if (oidcState.QuickConnect)
         {
-            return Content(BuildQuickConnectHtml(sessionToken, providerId, PluginBasePath()), "text/html");
+            return Content(
+                BuildQuickConnectHtml(sessionToken, providerId, PluginBasePath(), SsoPages.ServerBase(Request)),
+                "text/html");
         }
 
         return Content(
             SsoPages.BuildCompletionHtml(
-                sessionToken, "/sso/OIDC/Auth/" + providerId, "/", "Completing authentication..."),
+                sessionToken,
+                SsoPages.ServerBase(Request) + "/sso/OIDC/Auth/" + providerId,
+                SsoPages.ServerBase(Request) + "/",
+                "Completing authentication..."),
             "text/html");
     }
 
@@ -713,6 +718,7 @@ public class OidcController : ControllerBase
         var trustedProxies = ClientIpResolver.ParseCidrs(config.TrustedProxyCidrs, _logger);
         var scheme = ClientIpResolver.ResolveScheme(HttpContext, config.TrustForwardedHeaders, trustedProxies);
         var host = ClientIpResolver.ResolveHost(HttpContext, config.TrustForwardedHeaders, trustedProxies);
+        var basePath = SsoPages.ServerBase(Request);
         var providers = config.Providers
             .Where(p => p.Enabled)
             .Select(p => new
@@ -721,7 +727,7 @@ public class OidcController : ControllerBase
                 p.DisplayName,
                 p.ButtonColor,
                 p.ButtonIcon,
-                StartUrl = $"{scheme}://{host}/sso/OIDC/Start/{p.ProviderId}"
+                StartUrl = $"{scheme}://{host}{basePath}/sso/OIDC/Start/{p.ProviderId}"
             });
 
         return Ok(providers);
@@ -910,7 +916,7 @@ public class OidcController : ControllerBase
         var trustedProxies = ClientIpResolver.ParseCidrs(cfg.TrustedProxyCidrs, _logger);
         var scheme = ClientIpResolver.ResolveScheme(HttpContext, cfg.TrustForwardedHeaders, trustedProxies);
         var host = ClientIpResolver.ResolveHost(HttpContext, cfg.TrustForwardedHeaders, trustedProxies);
-        return $"{scheme}://{host}/sso/OIDC/Callback/{providerId}";
+        return $"{scheme}://{host}{SsoPages.ServerBase(Request)}/sso/OIDC/Callback/{providerId}";
     }
 
     // Validates the id_token's amr / acr claims against per-provider requirements.
@@ -1028,8 +1034,7 @@ public class OidcController : ControllerBase
     /// </summary>
     private string PluginBasePath()
     {
-        var pathBase = Request.PathBase.HasValue ? Request.PathBase.Value!.TrimEnd('/') : string.Empty;
-        return pathBase + "/sso/OIDC/";
+        return SsoPages.ServerBase(Request) + "/sso/OIDC/";
     }
 
     /// <summary>
@@ -1096,7 +1101,7 @@ public class OidcController : ControllerBase
     /// deliberately NOT written to localStorage, because this browser is a helper for signing in
     /// a television, not a device the user is trying to sign in to.
     /// </summary>
-    private static string BuildQuickConnectHtml(string sessionToken, string providerId, string basePath)
+    private static string BuildQuickConnectHtml(string sessionToken, string providerId, string basePath, string serverBase)
     {
         // Same rule as BuildCallbackHtml: everything crossing into <script> is JSON-encoded.
         var encodedToken = JsonSerializer.Serialize(sessionToken);
@@ -1104,6 +1109,7 @@ public class OidcController : ControllerBase
         var appVersion = OidcPlugin.Instance?.Version?.ToString() ?? "0.0.0";
         var encodedVersion = JsonSerializer.Serialize(appVersion);
         var encodedBase = JsonSerializer.Serialize(basePath);
+        var encodedServerBase = JsonSerializer.Serialize(serverBase);
 
         return $$"""
         <!DOCTYPE html>
@@ -1141,6 +1147,7 @@ public class OidcController : ControllerBase
             const token = {{encodedToken}};
             const providerId = {{encodedProvider}};
             const basePath = {{encodedBase}};
+            const serverBase = {{encodedServerBase}};
             const msg = document.getElementById('msg');
             const heading = document.getElementById('heading');
             const form = document.getElementById('form');
@@ -1223,7 +1230,7 @@ public class OidcController : ControllerBase
                     // authorizing; leaving it behind would accumulate a live token and a stray
                     // "Quick Connect bridge" entry in the user's device list on every use.
                     // Best-effort: the device is already signed in either way.
-                    fetch('/Sessions/Logout', {
+                    fetch(serverBase + '/Sessions/Logout', {
                         method: 'POST',
                         headers: { 'Authorization': 'MediaBrowser Token="' + accessToken + '"' }
                     }).catch(function() { /* nothing useful to do */ });

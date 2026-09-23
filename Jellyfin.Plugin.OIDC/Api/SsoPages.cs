@@ -11,6 +11,18 @@ namespace Jellyfin.Plugin.OIDC.Api;
 internal static class SsoPages
 {
     /// <summary>
+    /// The server's path prefix — Jellyfin's configured base URL (e.g. "/jellyfin"), or "" when
+    /// none is set — with no trailing slash. Jellyfin mounts the whole app under
+    /// <c>app.Map(BaseUrl)</c>, which surfaces the prefix as <c>Request.PathBase</c>.
+    ///
+    /// Every URL the plugin generates must start with this. Root-relative "/sso/..." paths skip
+    /// the base URL, so on a server with one they 404, and the OIDC redirect_uri and SAML ACS
+    /// URL they produce do not match what the IdP was told.
+    /// </summary>
+    public static string ServerBase(HttpRequest request) =>
+        request.PathBase.HasValue ? request.PathBase.Value!.TrimEnd('/') : string.Empty;
+
+    /// <summary>
     /// Headers for any page carrying a one-shot session token.
     ///
     /// The page must run a small inline bootstrap that hands the token back to /Auth and writes

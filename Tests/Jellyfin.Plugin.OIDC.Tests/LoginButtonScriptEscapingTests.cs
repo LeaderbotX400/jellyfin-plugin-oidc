@@ -34,7 +34,15 @@ public class LoginButtonScriptEscapingTests
         var configProviderMock = new Mock<IPluginConfigProvider>();
         configProviderMock.Setup(x => x.GetConfiguration()).Returns(config);
 
-        return new LoginButtonController(configProviderMock.Object);
+        return WithContext(new LoginButtonController(configProviderMock.Object));
+    }
+
+    private static LoginButtonController WithContext(LoginButtonController controller, string pathBase = "")
+    {
+        var http = new Microsoft.AspNetCore.Http.DefaultHttpContext();
+        http.Request.PathBase = pathBase;
+        controller.ControllerContext = new Microsoft.AspNetCore.Mvc.ControllerContext { HttpContext = http };
+        return controller;
     }
 
     private static string GetScript(LoginButtonController controller)
@@ -198,7 +206,7 @@ public class LoginButtonScriptEscapingTests
         var config = new PluginConfiguration { Providers = new List<OidcProviderConfig>() };
         var mock = new Mock<IPluginConfigProvider>();
         mock.Setup(x => x.GetConfiguration()).Returns(config);
-        var controller = new LoginButtonController(mock.Object);
+        var controller = WithContext(new LoginButtonController(mock.Object));
 
         var result = controller.GetLoginButtonsScript();
         var contentResult = Assert.IsType<ContentResult>(result);
@@ -218,7 +226,7 @@ public class LoginButtonScriptEscapingTests
         };
         var mock = new Mock<IPluginConfigProvider>();
         mock.Setup(x => x.GetConfiguration()).Returns(config);
-        var controller = new LoginButtonController(mock.Object);
+        var controller = WithContext(new LoginButtonController(mock.Object));
 
         var script = GetScript(controller);
 
@@ -252,5 +260,40 @@ public class LoginButtonScriptEscapingTests
         Assert.DoesNotContain(".style.cssText = 'display:block", script);
         // Color must appear inside the JSON CSS string
         Assert.Contains("#4285F4", script);
+    }
+
+    // ── Jellyfin base URL ────────────────────────────────────────────────────
+
+    [Fact]
+    public void Script_HonoursTheServerBaseUrl()
+    {
+        // Root-relative "/sso/..." hrefs 404 on a server with a base URL configured.
+        var controller = MakeController("Corp", "#123456");
+        controller.ControllerContext.HttpContext.Request.PathBase = "/jf";
+
+        var script = GetScript(controller);
+
+        Assert.Contains("\"/jf/sso/OIDC/Start/testprovider\"", script, StringComparison.Ordinal);
+        Assert.Contains("\"/jf/sso/OIDC/QuickConnect\"", script, StringComparison.Ordinal);
+        Assert.DoesNotContain("'/sso/", script, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Script_WithoutBaseUrl_UsesRootPaths()
+    {
+        var script = GetScript(MakeController("Corp", "#123456"));
+        Assert.Contains("\"/sso/OIDC/Start/testprovider\"", script, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void BrandingSnippet_HonoursTheServerBaseUrl()
+    {
+        var controller = MakeController("Corp", "#123456");
+        controller.ControllerContext.HttpContext.Request.PathBase = "/jf";
+
+        var ok = Assert.IsType<OkObjectResult>(controller.GetBrandingSnippet());
+        var html = (string)ok.Value!.GetType().GetProperty("Html")!.GetValue(ok.Value)!;
+
+        Assert.Contains("src=\"/jf/sso/OIDC/LoginButtons\"", html, StringComparison.Ordinal);
     }
 }

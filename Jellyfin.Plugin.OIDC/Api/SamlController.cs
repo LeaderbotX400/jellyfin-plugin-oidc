@@ -240,7 +240,10 @@ public class SamlController : ControllerBase
         SsoPages.SetSecurityHeaders(Response);
         return Content(
             SsoPages.BuildCompletionHtml(
-                sessionToken, "/sso/SAML/Auth/" + providerId, "/", "Completing SAML authentication..."),
+                sessionToken,
+                SsoPages.ServerBase(Request) + "/sso/SAML/Auth/" + providerId,
+                SsoPages.ServerBase(Request) + "/",
+                "Completing SAML authentication..."),
             "text/html");
     }
 
@@ -356,6 +359,7 @@ public class SamlController : ControllerBase
         var trustedProxies = ClientIpResolver.ParseCidrs(config.TrustedProxyCidrs, _logger);
         var scheme = ClientIpResolver.ResolveScheme(HttpContext, config.TrustForwardedHeaders, trustedProxies);
         var host = ClientIpResolver.ResolveHost(HttpContext, config.TrustForwardedHeaders, trustedProxies);
+        var basePath = SsoPages.ServerBase(Request);
         var providers = config.SamlProviders
             .Where(p => p.Enabled)
             .Select(p => new
@@ -363,7 +367,7 @@ public class SamlController : ControllerBase
                 p.Id,
                 p.DisplayName,
                 p.ButtonColor,
-                StartUrl = $"{scheme}://{host}/sso/SAML/Start/{p.Id}"
+                StartUrl = $"{scheme}://{host}{basePath}/sso/SAML/Start/{p.Id}"
             });
 
         return Ok(providers);
@@ -392,7 +396,7 @@ public class SamlController : ControllerBase
         var trustedProxies = ClientIpResolver.ParseCidrs(cfg.TrustedProxyCidrs, _logger);
         var scheme = ClientIpResolver.ResolveScheme(HttpContext, cfg.TrustForwardedHeaders, trustedProxies);
         var host = ClientIpResolver.ResolveHost(HttpContext, cfg.TrustForwardedHeaders, trustedProxies);
-        return $"{scheme}://{host}/sso/SAML/ACS/{providerId}";
+        return $"{scheme}://{host}{SsoPages.ServerBase(Request)}/sso/SAML/ACS/{providerId}";
     }
 
     /// <summary>

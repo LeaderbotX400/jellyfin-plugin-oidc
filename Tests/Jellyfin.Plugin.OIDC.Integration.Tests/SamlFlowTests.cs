@@ -454,6 +454,21 @@ public sealed class SamlFlowTests : IClassFixture<MockIdpFixture>
         Assert.Contains("\"/sso/SAML/Auth/" + ProviderId + "\"", content.Content, StringComparison.Ordinal);
     }
 
+    [Fact]
+    public void BaseUrl_IsHonouredByAcsUrlAndStartUrl()
+    {
+        var fixture = new TestFixture(_idp);
+        var provider = AddSignedSamlProvider(fixture);
+        fixture.SamlController.ControllerContext.HttpContext.Request.PathBase = "/jf";
+
+        var redirect = Assert.IsType<RedirectResult>(fixture.SamlController.Start(ProviderId));
+        var samlRequestB64 = HttpUtility.ParseQueryString(new Uri(redirect.Url).Query)["SAMLRequest"]!;
+        Assert.EndsWith("/jf/sso/SAML/ACS/" + ProviderId, ExtractAcsUrl(samlRequestB64), StringComparison.Ordinal);
+
+        var ok = Assert.IsType<OkObjectResult>(fixture.SamlController.GetProviders());
+        Assert.Contains("/jf/sso/SAML/Start/" + provider.Id, System.Text.Json.JsonSerializer.Serialize(ok.Value), StringComparison.Ordinal);
+    }
+
     private static string ExtractAcsUrl(string deflatedBase64)
     {
         var compressed = Convert.FromBase64String(deflatedBase64);
