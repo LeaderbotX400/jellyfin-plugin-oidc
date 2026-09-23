@@ -307,8 +307,8 @@ public sealed class UserSyncServiceTests : IDisposable
     [Fact]
     public async Task PreAuthorized_UserWithStoredRecordButNoLink_IsNotClaimed()
     {
-        // After an admin store reset links are gone but the account has had an SSO owner; a stored
-        // record is enough to refuse re-binding.
+        // A stored claim record without a link (e.g. a link lost to an older bug) still marks the
+        // account as having had an SSO owner, which is enough to refuse re-binding.
         var pinned = _userStore.CreateUser("ivan");
         pinned.AuthenticationProviderId = OurAuthProvider;
         await _store.UpsertAsync(new OidcUserRecord { UserId = pinned.Id, Sub = "old-sub", ProviderId = ProviderId });

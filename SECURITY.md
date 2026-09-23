@@ -52,7 +52,9 @@ defend the server.
   pre-authorized that user: set its authentication provider to
   OIDC-Auth, and the user has never been bound to any SSO identity. A
   user that already belongs to an SSO identity, on any provider, is
-  never rebound to another one.
+  never rebound to another one. (The admin-only user-store reset
+  forgets every binding, so after a reset pinned users can be claimed
+  again by a matching username.)
 - **Disabled accounts.** Jellyfin checks the disabled flag only on its
   own password path, so the plugin refuses SSO logins (and Quick
   Connect approvals) for disabled accounts itself. RBAC never clears

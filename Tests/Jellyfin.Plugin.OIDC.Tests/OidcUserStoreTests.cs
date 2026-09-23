@@ -156,6 +156,32 @@ public class OidcUserStoreTests : IDisposable
     }
 
     [Fact]
+    public async Task UnreadableStoreFile_FailsClosed_AndIsNotOverwritten()
+    {
+        // An unreadable file used to be treated as an empty store, so the next write replaced it
+        // and erased every sub→user link. Unix-only: relies on file mode bits, and root ignores them.
+        if (OperatingSystem.IsWindows() || Environment.UserName == "root") return;
+
+        var path = Path.Combine(_tempDir, $"store_{Guid.NewGuid():N}.json");
+        var owner = Guid.NewGuid();
+        await new OidcUserStore(path).LinkAsync(owner, "sub-owner", "p");
+
+        File.SetUnixFileMode(path, UnixFileMode.None);
+        try
+        {
+            var store = new OidcUserStore(path);
+            await Assert.ThrowsAsync<OidcUserStoreUnavailableException>(
+                () => store.LinkAsync(Guid.NewGuid(), "sub-other", "p"));
+        }
+        finally
+        {
+            File.SetUnixFileMode(path, UnixFileMode.UserRead | UnixFileMode.UserWrite);
+        }
+
+        Assert.Equal(owner, await new OidcUserStore(path).GetLinkedUserIdAsync("sub-owner", "p"));
+    }
+
+    [Fact]
     public async Task GetLinksForUser_SamlProvider_ReportsFullProviderId()
     {
         // SAML links are stored under "saml:{id}". Splitting at the first colon used to report

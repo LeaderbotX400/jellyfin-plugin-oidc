@@ -325,11 +325,13 @@ public class OidcUserStore : IDisposable
                 {
                     json = await File.ReadAllTextAsync(path).ConfigureAwait(false);
                 }
-                catch (IOException ex)
+                catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
                 {
-                    _logger?.LogWarning(ex, "OidcUserStore: failed to read store file '{Path}' — treating as empty", path);
-                    _loaded = true;
-                    return;
+                    // Fail closed, and do NOT mark the store loaded: treating an unreadable file as
+                    // empty let the next write overwrite the real one, erasing every sub→user link.
+                    // The next call retries the read.
+                    _logger?.LogError(ex, "OidcUserStore: failed to read store file '{Path}'; refusing to continue until it is readable", path);
+                    throw new OidcUserStoreUnavailableException("The OIDC user store file could not be read.");
                 }
 
                 try
