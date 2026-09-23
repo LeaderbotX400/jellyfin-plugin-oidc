@@ -219,4 +219,111 @@ public class RbacServiceTests
             Times.AtLeastOnce,
             "Expected an activity-log entry for the last-admin block event");
     }
+
+    // ── Revocation (no mapping matched) ──────────────────────────────────────
+
+    [Fact]
+    public async Task Apply_UserLostAllGroups_IsDemotedAndStripped()
+    {
+        // A user removed from the IdP admin group matches no mapping. This used to return early
+        // and leave every permission — administrator included — in place.
+        var alice = MakeUser("alice", isAdmin: true);
+        alice.SetPermission(PermissionKind.EnableContentDeletion, true);
+        var bob = MakeUser("bob", isAdmin: true);
+        var config = new PluginConfiguration
+        {
+            RoleMappings = new List<RoleMapping> { new() { RoleName = "admins", IsAdmin = true } }
+        };
+        var (svc, _, _) = BuildService(config, alice, new[] { bob });
+
+        await svc.ApplyRoleMappingsAsync(alice.Id, Array.Empty<string>(), Array.Empty<string>(), "idp");
+
+        Assert.False(GetPermission(alice, PermissionKind.IsAdministrator));
+        Assert.False(GetPermission(alice, PermissionKind.EnableContentDeletion));
+        Assert.False(GetPermission(alice, PermissionKind.EnableMediaPlayback));
+    }
+
+    [Fact]
+    public async Task Apply_UserLostAllGroups_LastAdminStillProtected()
+    {
+        var alice = MakeUser("alice", isAdmin: true);
+        var config = new PluginConfiguration
+        {
+            RoleMappings = new List<RoleMapping> { new() { RoleName = "admins", IsAdmin = true } }
+        };
+        var (svc, _, _) = BuildService(config, alice);
+
+        await svc.ApplyRoleMappingsAsync(alice.Id, Array.Empty<string>(), Array.Empty<string>(), "idp");
+
+        Assert.True(GetPermission(alice, PermissionKind.IsAdministrator));
+    }
+
+    [Fact]
+    public async Task Apply_DenyOnlyMatch_IsApplied()
+    {
+        var carol = MakeUser("carol");
+        carol.SetPermission(PermissionKind.EnableRemoteAccess, true);
+        var config = new PluginConfiguration
+        {
+            RoleMappings = new List<RoleMapping>
+            {
+                new() { RoleName = "no-remote", IsExplicitDeny = true, EnableRemoteAccess = true }
+            }
+        };
+        var (svc, _, _) = BuildService(config, carol);
+
+        await svc.ApplyRoleMappingsAsync(carol.Id, new[] { "no-remote" }, Array.Empty<string>(), "idp");
+
+        Assert.False(GetPermission(carol, PermissionKind.EnableRemoteAccess));
+    }
+
+    [Fact]
+    public async Task Apply_NoMappingsConfigured_LeavesUserUntouched()
+    {
+        // Plain-SSO deployment: RBAC is not in use, so nothing is written.
+        var dave = MakeUser("dave", isAdmin: true);
+        dave.SetPermission(PermissionKind.EnableMediaPlayback, true);
+        var (svc, userManager, _) = BuildService(new PluginConfiguration(), dave);
+
+        await svc.ApplyRoleMappingsAsync(dave.Id, new[] { "whatever" }, Array.Empty<string>(), "idp");
+
+        Assert.True(GetPermission(dave, PermissionKind.IsAdministrator));
+        Assert.True(GetPermission(dave, PermissionKind.EnableMediaPlayback));
+        userManager.Verify(m => m.UpdateUserAsync(It.IsAny<User>()), Times.Never);
+    }
+
+    [Fact]
+    public async Task Apply_MappingsOnlyForOtherProvider_LeavesUserUntouched()
+    {
+        var erin = MakeUser("erin", isAdmin: true);
+        var config = new PluginConfiguration
+        {
+            RoleMappings = new List<RoleMapping> { new() { RoleName = "admins", IsAdmin = true, ProviderId = "other" } }
+        };
+        var (svc, userManager, _) = BuildService(config, erin);
+
+        await svc.ApplyRoleMappingsAsync(erin.Id, Array.Empty<string>(), Array.Empty<string>(), "idp");
+
+        Assert.True(GetPermission(erin, PermissionKind.IsAdministrator));
+        userManager.Verify(m => m.UpdateUserAsync(It.IsAny<User>()), Times.Never);
+    }
+
+    [Fact]
+    public async Task Apply_RespectExistingMode_NoMatch_LeavesUnopinedFieldsAlone()
+    {
+        var frank = MakeUser("frank", isAdmin: true);
+        frank.SetPermission(PermissionKind.EnableContentDeletion, true);
+        var bob = MakeUser("bob", isAdmin: true);
+        var config = new PluginConfiguration
+        {
+            RbacBehavior = RbacBehaviorMode.RespectExistingWhenUnspecified,
+            RoleMappings = new List<RoleMapping> { new() { RoleName = "admins", IsAdmin = true } }
+        };
+        var (svc, _, _) = BuildService(config, frank, new[] { bob });
+
+        await svc.ApplyRoleMappingsAsync(frank.Id, Array.Empty<string>(), Array.Empty<string>(), "idp");
+
+        Assert.True(GetPermission(frank, PermissionKind.IsAdministrator));
+        Assert.True(GetPermission(frank, PermissionKind.EnableContentDeletion));
+    }
 }

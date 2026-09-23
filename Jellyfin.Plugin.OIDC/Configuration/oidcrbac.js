@@ -174,7 +174,8 @@ function renderProviders(view) {
             ) +
             subsection('Options',
                 chk('prov_enabled_' + idx, 'Enabled', p.Enabled !== false) +
-                chk('prov_entitlements_' + idx, 'Enable entitlements', p.EnableEntitlements !== false) +
+                chkDesc('prov_entitlements_' + idx, 'Enable entitlements', p.EnableEntitlements !== false,
+                    'The IdP can grant permissions directly through the entitlement claim \u2014 including administrator (jellyfin:admin) \u2014 with no role mapping here. Only leave this on if nobody but IdP administrators can set that claim.') +
                 chk('prov_emailverified_' + idx, 'Require email_verified claim', p.RequireEmailVerified) +
                 chkDesc('prov_rolesfromat_' + idx, 'Read roles from access token (validated) when ID token has none',
                     p.RolesFromAccessToken,

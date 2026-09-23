@@ -242,9 +242,25 @@ When a user matches multiple role mappings, permissions are **merged (union)**:
 
 Each role mapping has a priority field. Higher priority roles take precedence in ordering, though merge semantics still apply.
 
-### Default Role
+### Default Role and revocation
 
 If no role mappings match a user's IdP roles, the **Default Role** (configured in the General tab) is used as a fallback.
+
+If nothing matches and there is no Default Role, the user gets the **all-off baseline**: no
+administrator, no libraries, no playback. Any matching deny mappings still apply. This is how
+revocation works: remove someone from the IdP group and their next login strips what that
+group granted. (The hourly re-sync replays the roles stored at the last login, so it does not
+see IdP-side group changes.) The last-admin guard still refuses to demote the only
+administrator.
+
+This only happens when RBAC is in use for that provider, meaning at least one role mapping
+applies to it or the IdP sent entitlements. With no role mappings at all, the plugin never
+touches permissions (plain SSO). In the *Respect existing* RBAC mode, fields that nothing
+opined on are left as they are.
+
+> **Entitlements are on by default.** With *Enable entitlements* checked, the IdP can grant
+> permissions directly, including administrator (`jellyfin:admin`), without any role mapping in
+> the plugin. Only leave it on if nobody but your IdP administrators can set the entitlement claim.
 
 ### Supported Claim Paths
 

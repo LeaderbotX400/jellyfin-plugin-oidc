@@ -28,6 +28,16 @@ without realising it.
   and had no UI, and Unlink left accounts claimable by the next new identity.
 
 
+### RBAC revocation
+
+- **A login that matches no role mapping now strips permissions** instead of leaving them as
+  they were, when RBAC is in use for that provider (at least one role mapping applies to it, or
+  the IdP sent entitlements). Previously a user removed from the IdP admin group stayed a
+  Jellyfin admin, and deny mappings matched on their own were ignored. **Before upgrading, make
+  sure every user who should keep access matches a mapping, or set a Default Role.** Otherwise
+  their next login drops them to the all-off baseline (no playback, no libraries). Deployments
+  with no role mappings at all are unaffected. The last-admin guard still applies.
+
 ## v1.0.0 — Jellyfin 12
 
 ### What changed

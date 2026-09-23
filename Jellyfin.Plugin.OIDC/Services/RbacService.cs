@@ -71,13 +71,32 @@ public class RbacService
 
         var preview = ComputePermissions(userRoles, entitlements, providerId, config);
 
+        // RBAC is "in use" for this login when any role mapping applies to this provider, or the
+        // IdP sent entitlements. Only when neither holds is the user left untouched — that is a
+        // plain-SSO deployment, where writing the all-off result would strip playback from everyone.
+        //
+        // When RBAC is in use, a login that matches nothing is NOT a no-op: it is the signal that
+        // the user lost their groups. This used to return early, so a user removed from the IdP's
+        // admin group stayed a Jellyfin admin indefinitely, and deny-only matches were ignored. The
+        // resolver's all-off result plus any deny mappings is exactly what should be written.
+        var rbacInUse = preview.ParsedEntitlements.Length > 0
+            || config.RoleMappings.Any(m =>
+                string.IsNullOrEmpty(m.ProviderId)
+                || string.Equals(m.ProviderId, providerId, StringComparison.OrdinalIgnoreCase));
+        if (!rbacInUse)
+        {
+            _logger.LogDebug(
+                "No role mappings configured for provider {Provider} and no entitlements; leaving permissions for {Username} unchanged",
+                providerId, user.Username);
+            return;
+        }
+
         if (preview.MatchedGrantMappings.Length == 0 && preview.ParsedEntitlements.Length == 0)
         {
-            var verbose = _configProvider.GetConfiguration().VerboseClaimLogging;
+            var verbose = config.VerboseClaimLogging;
             _logger.LogInformation(
-                "No role mappings or entitlements matched for user {Username} (roleCount={RoleCount})",
+                "No role mappings or entitlements matched for user {Username} (roleCount={RoleCount}); applying deny-all baseline",
                 user.Username, LogRedaction.RedactRoles(userRoles, verbose));
-            return;
         }
 
         // Last-admin lockout protection: if the computed preview would demote this user from admin,

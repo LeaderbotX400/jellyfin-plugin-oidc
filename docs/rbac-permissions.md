@@ -172,6 +172,10 @@ The resolver runs once per login. Order:
    that match the user's roles are collected.
 2. **Default Role fallback.** If no grant mapping matched and a Default Role is
    configured, the mapping with that role name is added as the single grant.
+   If there is still no grant, the all-off baseline is used, so a user who lost
+   every group is stripped rather than left as they were. This applies only
+   when RBAC is in use for the provider, meaning at least one role mapping
+   applies to it or the IdP sent entitlements. Otherwise the plugin writes nothing.
 3. **Merge grants.** For each field: any-true wins (booleans), highest-value
    wins (`MaxParentalRating`), 0-trumps-numeric (`MaxActiveSessions`), union
    (libraries).
