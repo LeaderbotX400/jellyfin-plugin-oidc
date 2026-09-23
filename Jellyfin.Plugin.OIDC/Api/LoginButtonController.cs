@@ -30,9 +30,29 @@ public class LoginButtonController : ControllerBase
 
         var sb = new StringBuilder();
         sb.AppendLine("(function() {");
+        // The middleware loads this script into index.html, so it lives for the whole SPA session
+        // and the observer fires on every page. Only .manualLoginForm identifies the login view —
+        // a generic "page with a form" selector matched item detail pages. Jellyfin keeps cached
+        // views in the DOM with the "hide" class, so a login form that exists but is not visible
+        // does not count, and buttons left behind from a previous login view are removed.
+        sb.AppendLine("  function loginForm() {");
+        sb.AppendLine("    var forms = document.querySelectorAll('#loginPage .manualLoginForm, .manualLoginForm');");
+        sb.AppendLine("    for (var i = 0; i < forms.length; i++) {");
+        // Visibility is judged on the form's parent, not the form: the login view hides the form
+        // itself while it shows user tiles, and the buttons belong on that screen too.
+        sb.AppendLine("      var host = forms[i].parentNode;");
+        sb.AppendLine("      if (!host.closest('.hide') && host.offsetParent !== null) return forms[i];");
+        sb.AppendLine("    }");
+        sb.AppendLine("    return null;");
+        sb.AppendLine("  }");
         sb.AppendLine("  function addButtons() {");
-        sb.AppendLine("    var form = document.querySelector('.manualLoginForm, #loginPage form, [data-role=\"page\"] form');");
-        sb.AppendLine("    if (!form || document.getElementById('oidc-sso-buttons')) return;");
+        sb.AppendLine("    var form = loginForm();");
+        sb.AppendLine("    var existing = document.getElementById('oidc-sso-buttons');");
+        sb.AppendLine("    if (existing) {");
+        sb.AppendLine("      if (form && existing.nextElementSibling === form) return;");
+        sb.AppendLine("      existing.remove();");
+        sb.AppendLine("    }");
+        sb.AppendLine("    if (!form) return;");
         sb.AppendLine("    var container = document.createElement('div');");
         sb.AppendLine("    container.id = 'oidc-sso-buttons';");
         sb.AppendLine("    container.style.cssText = 'margin:1em 0;text-align:center;';");
@@ -83,6 +103,7 @@ public class LoginButtonController : ControllerBase
         sb.AppendLine("  }");
         sb.AppendLine("  var observer = new MutationObserver(addButtons);");
         sb.AppendLine("  observer.observe(document.body, { childList: true, subtree: true });");
+        sb.AppendLine("  window.addEventListener('hashchange', addButtons);");
         sb.AppendLine("  addButtons();");
         sb.AppendLine("})();");
 
