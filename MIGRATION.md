@@ -64,6 +64,17 @@ without realising it.
   `https://media.example.com/jellyfin/sso/OIDC/Callback/<provider>` (and the matching
   `/jellyfin/sso/SAML/ACS/<id>` for SAML). Servers without a base URL are unaffected.
 
+### Smaller fixes
+
+- **Require-SSO admin exemption.** The break-glass exemption read `"Username"` from the
+  login body case-sensitively, while Jellyfin binds it case-insensitively. A body naming an
+  admin in one spelling and another user in a second spelling could waive the policy for a
+  non-admin password login. Ambiguous bodies are now refused.
+- Avatar downloads now have one 5-second deadline covering the body, not only the headers.
+- Back-channel logout remembers each `jti` for the whole window in which the token is
+  acceptable (keyed on `iat`), closing a replay gap.
+- Admin UI values containing quotes no longer corrupt the form on save.
+
 ## v1.0.0 — Jellyfin 12
 
 ### What changed

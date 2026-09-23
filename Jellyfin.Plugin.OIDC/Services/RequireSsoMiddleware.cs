@@ -215,14 +215,38 @@ public sealed class RequireSsoMiddleware
 
             context.Request.Body.Position = 0;
 
-            if (document.RootElement.ValueKind != JsonValueKind.Object
-                || !document.RootElement.TryGetProperty("Username", out var usernameElement)
-                || usernameElement.ValueKind != JsonValueKind.String)
+            if (document.RootElement.ValueKind != JsonValueKind.Object)
             {
                 return false;
             }
 
-            var username = usernameElement.GetString();
+            // Read the username the way Jellyfin's model binder will: property names match
+            // case-insensitively. An exact-case TryGetProperty("Username") let a body carry
+            // {"Username":"<an admin>","username":"<anyone>"}: this check saw the admin and waived
+            // the policy, while the binder took the other spelling and logged in "anyone" with a
+            // password. Anything other than exactly one candidate proves nothing, so it waives nothing.
+            JsonElement? usernameElement = null;
+            foreach (var property in document.RootElement.EnumerateObject())
+            {
+                if (!string.Equals(property.Name, "Username", StringComparison.OrdinalIgnoreCase))
+                {
+                    continue;
+                }
+
+                if (usernameElement is not null)
+                {
+                    return false;
+                }
+
+                usernameElement = property.Value;
+            }
+
+            if (usernameElement is not { ValueKind: JsonValueKind.String } element)
+            {
+                return false;
+            }
+
+            var username = element.GetString();
             if (string.IsNullOrEmpty(username))
             {
                 return false;

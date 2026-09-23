@@ -1,4 +1,5 @@
 using System;
+using System.Threading.Tasks;
 using Jellyfin.Plugin.OIDC.Services;
 using Xunit;
 
@@ -86,4 +87,74 @@ public sealed class RequireSsoRouteTests
     [InlineData("//Users//AuthenticateByName//")]
     public void NormalisesSlashes(string path)
         => Assert.True(RequireSsoMiddleware.IsPasswordAuthEndpoint("POST", path), path);
+}
+
+/// <summary>
+/// The admin break-glass exemption. It reads the username out of the request body, so it must
+/// read it exactly the way Jellyfin's model binder will, or the two can be made to disagree.
+/// </summary>
+public sealed class RequireSsoAdminExemptionTests
+{
+    private static async Task<(bool PassedThrough, int Status)> Run(string body)
+    {
+        var admin = new Jellyfin.Database.Implementations.Entities.User("admin", "p", "r");
+        Jellyfin.Data.UserEntityExtensions.SetPermission(
+            admin, Jellyfin.Database.Implementations.Enums.PermissionKind.IsAdministrator, true);
+        var victim = new Jellyfin.Database.Implementations.Entities.User("victim", "p", "r");
+
+        var users = new Moq.Mock<MediaBrowser.Controller.Library.IUserManager>();
+        users.Setup(u => u.GetUserByName("admin")).Returns(admin);
+        users.Setup(u => u.GetUserByName("victim")).Returns(victim);
+
+        var config = new Moq.Mock<IPluginConfigProvider>();
+        config.Setup(c => c.GetConfiguration()).Returns(new Configuration.PluginConfiguration
+        {
+            RequireSsoForAll = true,
+            SsoExemptAdmins = true
+        });
+
+        var passed = false;
+        var middleware = new RequireSsoMiddleware(
+            _ => { passed = true; return Task.CompletedTask; },
+            config.Object,
+            users.Object,
+            Microsoft.Extensions.Logging.Abstractions.NullLogger<RequireSsoMiddleware>.Instance);
+
+        var context = new Microsoft.AspNetCore.Http.DefaultHttpContext();
+        context.Request.Method = "POST";
+        context.Request.Path = "/Users/AuthenticateByName";
+        context.Request.Body = new System.IO.MemoryStream(System.Text.Encoding.UTF8.GetBytes(body));
+        context.Response.Body = new System.IO.MemoryStream();
+
+        await middleware.InvokeAsync(context);
+        return (passed, context.Response.StatusCode);
+    }
+
+    [Fact]
+    public async Task RealAdmin_IsExempt()
+        => Assert.True((await Run("{\"Username\":\"admin\",\"Pw\":\"x\"}")).PassedThrough);
+
+    [Fact]
+    public async Task RealAdmin_LowercasePropertyName_IsExempt()
+        => Assert.True((await Run("{\"username\":\"admin\",\"Pw\":\"x\"}")).PassedThrough);
+
+    [Fact]
+    public async Task NonAdmin_IsRefused()
+    {
+        var (passed, status) = await Run("{\"Username\":\"victim\",\"Pw\":\"x\"}");
+        Assert.False(passed);
+        Assert.Equal(403, status);
+    }
+
+    [Theory]
+    [InlineData("{\"Username\":\"admin\",\"username\":\"victim\",\"Pw\":\"x\"}")]
+    [InlineData("{\"username\":\"victim\",\"Username\":\"admin\",\"Pw\":\"x\"}")]
+    [InlineData("{\"Username\":\"admin\",\"Username\":\"victim\",\"Pw\":\"x\"}")]
+    public async Task AmbiguousUsername_IsNotExempt(string body)
+    {
+        // The exemption must not see an admin while the binder logs in someone else.
+        var (passed, status) = await Run(body);
+        Assert.False(passed);
+        Assert.Equal(403, status);
+    }
 }

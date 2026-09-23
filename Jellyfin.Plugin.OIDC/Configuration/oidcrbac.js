@@ -2,10 +2,16 @@ var pluginId = 'eea268ef-ea57-4462-91c4-44833ae08510';
 var cfg = null;
 var libs = {};
 
+// Escapes for BOTH text and attribute context. The old textContent/innerHTML trick escapes only
+// &, < and >, so a value containing a double quote broke out of value="..." attributes: saving a
+// provider named My "Home" SSO truncated it, and a crafted value could add event handlers.
 function esc(str) {
-    var d = document.createElement('div');
-    d.textContent = str;
-    return d.innerHTML;
+    return String(str == null ? '' : str)
+        .replace(/&/g, '&amp;')
+        .replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;')
+        .replace(/"/g, '&quot;')
+        .replace(/'/g, '&#39;');
 }
 
 function gval(view, id) {

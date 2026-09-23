@@ -542,6 +542,59 @@ public sealed class ProfileImageServiceTests : IDisposable
         ProviderId = "testidp"
     });
 
+    [Fact]
+    public async Task BodyThatStalls_IsAbandonedAtTheFetchDeadline()
+    {
+        // HttpClient.Timeout stops covering the body once headers arrive (ResponseHeadersRead), so
+        // a host that sends headers then stalls used to hold the login open indefinitely.
+        _handler = new StubHandler { BodyStream = new StallingStream(PngBytes) };
+        var service = CreateService();
+
+        var sw = System.Diagnostics.Stopwatch.StartNew();
+        await service.ApplyAsync(_user.Id, AvatarUrl, "testidp", CancellationToken.None);
+        sw.Stop();
+
+        Assert.True(sw.Elapsed < TimeSpan.FromSeconds(20), $"took {sw.Elapsed}");
+        _providerManagerMock.Verify(
+            m => m.SaveImage(It.IsAny<Stream>(), It.IsAny<string>(), It.IsAny<string>()), Times.Never);
+    }
+
+    /// <summary>Returns a prefix, then blocks every further read until cancelled.</summary>
+    private sealed class StallingStream : Stream
+    {
+        private readonly byte[] _prefix;
+        private bool _sent;
+
+        public StallingStream(byte[] prefix) => _prefix = prefix;
+
+        public override async ValueTask<int> ReadAsync(Memory<byte> buffer, CancellationToken cancellationToken = default)
+        {
+            if (!_sent)
+            {
+                _sent = true;
+                _prefix.CopyTo(buffer);
+                return _prefix.Length;
+            }
+
+            await Task.Delay(Timeout.Infinite, cancellationToken).ConfigureAwait(false);
+            return 0;
+        }
+
+        public override Task<int> ReadAsync(byte[] buffer, int offset, int count, CancellationToken cancellationToken)
+            => ReadAsync(buffer.AsMemory(offset, count), cancellationToken).AsTask();
+
+        public override int Read(byte[] buffer, int offset, int count) => throw new NotSupportedException();
+        public override bool CanRead => true;
+        public override bool CanSeek => false;
+        public override bool CanWrite => false;
+        public override long Length => throw new NotSupportedException();
+        public override long Position { get => throw new NotSupportedException(); set => throw new NotSupportedException(); }
+        public override void Flush() { }
+        public override long Seek(long offset, SeekOrigin origin) => throw new NotSupportedException();
+        public override void SetLength(long value) => throw new NotSupportedException();
+        public override void Write(byte[] buffer, int offset, int count) => throw new NotSupportedException();
+    }
+
     private static byte[] BuildOversizePng()
     {
         var bytes = new byte[ProfileImageService.MaxProfileImageBytes + 1024];
@@ -564,6 +617,7 @@ public sealed class ProfileImageServiceTests : IDisposable
         public Uri? RedirectLocation { get; init; }
         public bool SuppressContentLength { get; init; }
         public bool ThrowOnSend { get; init; }
+        public Stream? BodyStream { get; init; }
         public int RequestCount { get; private set; }
 
         protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
@@ -583,7 +637,9 @@ public sealed class ProfileImageServiceTests : IDisposable
             }
 
             // A stream content with unknown length is how a real server omits Content-Length.
-            response.Content = SuppressContentLength
+            response.Content = BodyStream is not null
+                ? new StreamContent(BodyStream)
+                : SuppressContentLength
                 ? new StreamContent(new MemoryStream(Body))
                 : new ByteArrayContent(Body);
             response.Content.Headers.ContentType = new MediaTypeHeaderValue(MediaType);
