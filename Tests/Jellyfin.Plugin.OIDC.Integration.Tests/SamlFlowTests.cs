@@ -279,6 +279,24 @@ public sealed class SamlFlowTests : IClassFixture<MockIdpFixture>
     }
 
     [Fact]
+    public async Task AcsFlow_RelayStateFromAnotherProvider_IsRejected()
+    {
+        var fixture = new TestFixture(_idp);
+        AddSignedSamlProvider(fixture);
+        AddSignedSamlProvider(fixture, "other-saml");
+
+        var redirect = Assert.IsType<RedirectResult>(fixture.SamlController.Start("other-saml"));
+        var qs = HttpUtility.ParseQueryString(new Uri(redirect.Url).Query);
+        var requestId = ExtractRequestId(qs["SAMLRequest"]!);
+        TestFixture.PropagateCookies(fixture.SamlController);
+
+        var result = await fixture.SamlController.AssertionConsumerService(
+            ProviderId, BuildAndSignResponse("alice", new[] { "user" }, requestId), qs["RelayState"]);
+
+        Assert.IsType<BadRequestObjectResult>(result);
+    }
+
+    [Fact]
     public async Task AcsFlow_ReplayedAssertion_Rejected()
     {
         var fixture = new TestFixture(_idp);

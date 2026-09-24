@@ -304,7 +304,7 @@ public class StateManagerTests
     [Fact]
     public void StoreState_AtCapacity_RefusesInsteadOfGrowing()
     {
-        // /Start is anonymous; an unbounded store lets anyone exhaust server memory.
+        // Global memory backstop for callers without a client key.
         var sm = Create();
         for (var i = 0; i < StateManager.MaxPendingStates; i++)
         {
@@ -324,6 +324,58 @@ public class StateManagerTests
         }
 
         Assert.NotNull(sm.StoreState(NewState()));
+    }
+
+    [Fact]
+    public void StoreState_OneClientAtItsLimit_DoesNotBlockAnotherClient()
+    {
+        // A global cap alone let one anonymous client fill every slot and lock everyone out.
+        var sm = Create();
+        for (var i = 0; i < StateManager.MaxPendingStatesPerClient; i++)
+        {
+            Assert.NotNull(sm.StoreState(NewState(), "198.51.100.7"));
+        }
+
+        Assert.Null(sm.StoreState(NewState(), "198.51.100.7"));
+        Assert.NotNull(sm.StoreState(NewState(), "203.0.113.9"));
+    }
+
+    [Fact]
+    public void StoreState_ConsumingFreesTheClientsSlot()
+    {
+        var sm = Create();
+        string? last = null;
+        for (var i = 0; i < StateManager.MaxPendingStatesPerClient; i++)
+        {
+            last = sm.StoreState(NewState(), "198.51.100.7");
+        }
+
+        Assert.NotNull(sm.ConsumeState(last!));
+        Assert.NotNull(sm.StoreState(NewState(), "198.51.100.7"));
+    }
+
+    [Fact]
+    public void StoreState_ExpiredEntriesFreeTheClientsSlots()
+    {
+        var sm = Create();
+        for (var i = 0; i < StateManager.MaxPendingStatesPerClient; i++)
+        {
+            sm.StoreState(NewState(DateTimeOffset.UtcNow.AddHours(-1)), "198.51.100.7");
+        }
+
+        sm.RunCleanup();
+        Assert.NotNull(sm.StoreState(NewState(), "198.51.100.7"));
+    }
+
+    [Theory]
+    [InlineData("2001:db8:1:2::1", "2001:db8:1:2:ffff::9")]
+    [InlineData("::ffff:198.51.100.7", "198.51.100.7")]
+    public void ClientKeyFor_GroupsAddressesOneSubscriberControls(string a, string b)
+    {
+        // A subscriber usually holds a whole IPv6 /64, so per-address keys would be free to rotate.
+        Assert.Equal(
+            StateManager.ClientKeyFor(System.Net.IPAddress.Parse(a)),
+            StateManager.ClientKeyFor(System.Net.IPAddress.Parse(b)));
     }
 
     private static OidcState NewState(DateTimeOffset? createdAt = null) => new()

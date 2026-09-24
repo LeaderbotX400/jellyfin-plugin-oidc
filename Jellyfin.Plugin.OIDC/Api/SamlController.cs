@@ -80,7 +80,7 @@ public class SamlController : ControllerBase
             // SameSite=Lax cookie does not ride, so it travels with the session to /Auth — a
             // same-origin fetch from the callback page — and is verified there.
             CsrfBindingHash = BrowserBindingCookie.Issue(Request, Response, BindingKey(provider))
-        });
+        }, StateManager.ClientKeyFor(ClientAddress()));
 
         if (stateKey is null)
         {
@@ -369,6 +369,14 @@ public class SamlController : ControllerBase
         return Ok(providers);
     }
 
+    /// <summary>The caller's address, honouring forwarded headers only from configured trusted proxies.</summary>
+    private System.Net.IPAddress? ClientAddress()
+    {
+        var cfg = _configProvider.GetConfiguration();
+        return ClientIpResolver.Resolve(
+            HttpContext, cfg.TrustForwardedHeaders, ClientIpResolver.ParseCidrs(cfg.TrustedProxyCidrs, _logger), _logger);
+    }
+
     private SamlProviderConfig? GetProvider(string providerId)
     {
         return _configProvider.GetConfiguration().SamlProviders
@@ -390,7 +398,8 @@ public class SamlController : ControllerBase
     /// <summary>
     /// Cookie key for the SAML browser binding. Uses the configured id (validated to
     /// [A-Za-z0-9_-]) rather than the URL segment, whose casing may differ between legs, and a
-    /// prefix so it can never collide with an OIDC provider of the same id.
+    /// "saml." prefix: "." cannot occur in a provider id, so no OIDC provider id (which the OIDC
+    /// flow uses as its key) can ever produce the same cookie name.
     /// </summary>
-    private static string BindingKey(SamlProviderConfig provider) => "saml-" + provider.Id;
+    private static string BindingKey(SamlProviderConfig provider) => "saml." + provider.Id;
 }

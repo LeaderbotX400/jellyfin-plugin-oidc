@@ -50,8 +50,10 @@ without realising it.
   unsigned wrapper used to be accepted, with the Response-level checks reading the wrapper.
 - The SAML completion page gained the plain-HTTP device-id fallback the OIDC page already had.
   Both pages, and the Quick Connect page, now send `Cache-Control: no-store`.
-- `/Start` refuses with 503 when 10,000 sign-ins are already in flight, instead of growing
-  memory without bound.
+- `/Start` refuses with 503 once one client (an IPv4 address or an IPv6 /64) has 50 unfinished
+  sign-ins in flight, instead of letting anyone grow server memory without bound. Behind a reverse
+  proxy, configure `TrustForwardedHeaders` + `TrustedProxyCidrs` so clients are told apart;
+  otherwise every client shares the proxy's allowance, as with the callback rate limiter.
 
 ## v1.0.0 — Jellyfin 12
 

@@ -145,7 +145,7 @@ public class OidcController : ControllerBase
             QuickConnect = quickConnect
         };
 
-        var stateKey = _stateManager.StoreState(state);
+        var stateKey = _stateManager.StoreState(state, StateManager.ClientKeyFor(ClientAddress()));
         if (stateKey is null)
         {
             return StatusCode(503, "Too many sign-ins in progress. Try again in a few minutes.");
@@ -884,6 +884,14 @@ public class OidcController : ControllerBase
         }
 
         return null;
+    }
+
+    /// <summary>The caller's address, honouring forwarded headers only from configured trusted proxies.</summary>
+    private System.Net.IPAddress? ClientAddress()
+    {
+        var cfg = _configProvider.GetConfiguration();
+        return ClientIpResolver.Resolve(
+            HttpContext, cfg.TrustForwardedHeaders, ClientIpResolver.ParseCidrs(cfg.TrustedProxyCidrs, _logger), _logger);
     }
 
     private OidcProviderConfig? GetProvider(string providerId)

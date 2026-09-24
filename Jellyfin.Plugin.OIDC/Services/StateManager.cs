@@ -72,10 +72,20 @@ public sealed class StateManager : IHostedService, IDisposable
     private static readonly TimeSpan SessionExpiry = TimeSpan.FromMinutes(5);
     private static readonly TimeSpan CleanupInterval = TimeSpan.FromMinutes(2);
 
-    /// <summary>Upper bound on in-flight logins. Far above any household or small-org load.</summary>
-    internal const int MaxPendingStates = 10_000;
+    /// <summary>
+    /// In-flight logins one client may hold at once. The per-client limit is the real control: a
+    /// global cap alone let a single anonymous client fill every slot and lock everyone out.
+    /// </summary>
+    internal const int MaxPendingStatesPerClient = 50;
 
-    private readonly ConcurrentDictionary<string, OidcState> _pendingStates = new(StringComparer.Ordinal);
+    /// <summary>Memory backstop across all clients (many sources, or an unkeyed caller).</summary>
+    internal const int MaxPendingStates = 100_000;
+
+    private readonly ConcurrentDictionary<string, int> _pendingPerClient = new(StringComparer.Ordinal);
+
+    private sealed record OidcStateEntry(OidcState State, string? ClientKey);
+
+    private readonly ConcurrentDictionary<string, OidcStateEntry> _pendingStates = new(StringComparer.Ordinal);
     private readonly ConcurrentDictionary<string, AuthorizedSession> _authorizedSessions = new(StringComparer.Ordinal);
     private readonly ILogger<StateManager> _logger;
     private CancellationTokenSource? _cts;
@@ -114,14 +124,15 @@ public sealed class StateManager : IHostedService, IDisposable
 
     /// <summary>
     /// Stores the state for a flow that is about to leave for the IdP, returning its opaque key,
-    /// or null when the store is full.
+    /// or null when the caller must refuse (503).
     ///
-    /// /Start is anonymous and every call adds an entry that lives for 10 minutes, so without a
-    /// bound anyone can grow this dictionary until the server runs out of memory. At the cap,
-    /// expired entries are swept first; if it is still full the caller refuses (503) rather than
-    /// evicting live entries, which would let a flood cancel real users' in-flight logins.
+    /// /Start is anonymous and every call adds an entry that lives for 10 minutes, so it needs a
+    /// bound. The bound is per client (<paramref name="clientKey"/>, from
+    /// <see cref="ClientKeyFor"/>): a flood from one source exhausts only its own allowance, not
+    /// everyone's. Live entries are never evicted, which would let a flood cancel real users'
+    /// in-flight logins; expired ones are swept first when the global backstop is reached.
     /// </summary>
-    public string? StoreState(OidcState state)
+    public string? StoreState(OidcState state, string? clientKey = null)
     {
         if (_pendingStates.Count >= MaxPendingStates)
         {
@@ -135,9 +146,69 @@ public sealed class StateManager : IHostedService, IDisposable
             }
         }
 
+        if (clientKey is not null)
+        {
+            var held = _pendingPerClient.AddOrUpdate(clientKey, 1, (_, n) => n + 1);
+            if (held > MaxPendingStatesPerClient)
+            {
+                ReleaseClientSlot(clientKey);
+                _logger.LogWarning(
+                    "Refusing to start an SSO login: client {Client} already has {Cap} sign-ins in flight",
+                    clientKey, MaxPendingStatesPerClient);
+                return null;
+            }
+        }
+
         var key = GenerateCsprngToken();
-        _pendingStates[key] = state;
+        _pendingStates[key] = new OidcStateEntry(state, clientKey);
         return key;
+    }
+
+    /// <summary>
+    /// The key a client's pending logins are counted under: the IPv4 address, or the /64 for IPv6
+    /// (one subscriber usually holds a whole /64, so per-address keys would be trivially rotated).
+    /// Null when the address is unknown.
+    /// </summary>
+    public static string? ClientKeyFor(System.Net.IPAddress? address)
+    {
+        if (address is null)
+        {
+            return null;
+        }
+
+        if (address.IsIPv4MappedToIPv6)
+        {
+            address = address.MapToIPv4();
+        }
+
+        if (address.AddressFamily == System.Net.Sockets.AddressFamily.InterNetworkV6)
+        {
+            return Convert.ToHexString(address.GetAddressBytes(), 0, 8) + "::/64";
+        }
+
+        return address.ToString();
+    }
+
+    private void ReleaseClientSlot(string? clientKey)
+    {
+        if (clientKey is null)
+        {
+            return;
+        }
+
+        var remaining = _pendingPerClient.AddOrUpdate(clientKey, 0, (_, n) => Math.Max(0, n - 1));
+        if (remaining == 0)
+        {
+            _pendingPerClient.TryRemove(new KeyValuePair<string, int>(clientKey, 0));
+        }
+    }
+
+    private void RemovePending(string key, OidcStateEntry entry)
+    {
+        if (_pendingStates.TryRemove(new KeyValuePair<string, OidcStateEntry>(key, entry)))
+        {
+            ReleaseClientSlot(entry.ClientKey);
+        }
     }
 
     public OidcState? ConsumeState(string stateKey)
@@ -147,10 +218,13 @@ public sealed class StateManager : IHostedService, IDisposable
             return null;
         }
 
-        if (!_pendingStates.TryRemove(stateKey, out var state))
+        if (!_pendingStates.TryRemove(stateKey, out var entry))
         {
             return null;
         }
+
+        ReleaseClientSlot(entry.ClientKey);
+        var state = entry.State;
 
         if (DateTimeOffset.UtcNow - state.CreatedAt > StateExpiry)
         {
@@ -249,11 +323,11 @@ public sealed class StateManager : IHostedService, IDisposable
     {
         var now = DateTimeOffset.UtcNow;
 
-        foreach (var (key, oidcState) in _pendingStates)
+        foreach (var (key, entry) in _pendingStates)
         {
-            if (now - oidcState.CreatedAt > StateExpiry)
+            if (now - entry.State.CreatedAt > StateExpiry)
             {
-                _pendingStates.TryRemove(key, out _);
+                RemovePending(key, entry);
             }
         }
 

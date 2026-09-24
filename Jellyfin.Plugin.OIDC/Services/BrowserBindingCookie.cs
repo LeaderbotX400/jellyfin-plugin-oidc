@@ -28,7 +28,7 @@ public static class BrowserBindingCookie
     /// <summary>
     /// Issues a fresh binding cookie named for <paramref name="key"/> and returns the hash to store
     /// in server-side state. <paramref name="key"/> must be cookie-name safe (provider ids are
-    /// validated to [A-Za-z0-9_-]).
+    /// validated to [A-Za-z0-9_-]; SAML keys add a "saml." prefix).
     /// </summary>
     public static byte[] Issue(HttpRequest request, HttpResponse response, string key)
     {
