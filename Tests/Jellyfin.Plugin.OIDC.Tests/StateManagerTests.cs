@@ -378,6 +378,28 @@ public class StateManagerTests
             StateManager.ClientKeyFor(System.Net.IPAddress.Parse(b)));
     }
 
+    [Theory]
+    [InlineData("127.0.0.1")]
+    [InlineData("::1")]
+    [InlineData("::ffff:127.0.0.1")]
+    public void ClientKeyFor_Loopback_IsUnkeyed(string address)
+    {
+        // A same-host reverse proxy makes every client loopback; keying it would let one attacker
+        // exhaust everyone's shared allowance.
+        Assert.Null(StateManager.ClientKeyFor(System.Net.IPAddress.Parse(address)));
+    }
+
+    [Fact]
+    public void StoreState_ManyStartsFromLoopback_AreNotCappedPerClient()
+    {
+        var sm = Create();
+        var key = StateManager.ClientKeyFor(System.Net.IPAddress.Loopback);
+        for (var i = 0; i <= StateManager.MaxPendingStatesPerClient; i++)
+        {
+            Assert.NotNull(sm.StoreState(NewState(), key));
+        }
+    }
+
     private static OidcState NewState(DateTimeOffset? createdAt = null) => new()
     {
         ProviderId = "p",

@@ -167,7 +167,7 @@ public sealed class StateManager : IHostedService, IDisposable
     /// <summary>
     /// The key a client's pending logins are counted under: the IPv4 address, or the /64 for IPv6
     /// (one subscriber usually holds a whole /64, so per-address keys would be trivially rotated).
-    /// Null when the address is unknown.
+    /// Null when the address is unknown or loopback.
     /// </summary>
     public static string? ClientKeyFor(System.Net.IPAddress? address)
     {
@@ -179,6 +179,15 @@ public sealed class StateManager : IHostedService, IDisposable
         if (address.IsIPv4MappedToIPv6)
         {
             address = address.MapToIPv4();
+        }
+
+        // Loopback is almost always a reverse proxy on the same host with forwarded headers not
+        // trusted, so every real client arrives as 127.0.0.1. Keying it would give them all one
+        // shared allowance that a single attacker could exhaust; leave it to the global backstop,
+        // as CallbackRateLimiter does.
+        if (System.Net.IPAddress.IsLoopback(address))
+        {
+            return null;
         }
 
         if (address.AddressFamily == System.Net.Sockets.AddressFamily.InterNetworkV6)
