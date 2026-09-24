@@ -69,7 +69,10 @@ without realising it.
 - **Require-SSO admin exemption.** The break-glass exemption read `"Username"` from the
   login body case-sensitively, while Jellyfin binds it case-insensitively. A body naming an
   admin in one spelling and another user in a second spelling could waive the policy for a
-  non-admin password login. Ambiguous bodies are now refused.
+  non-admin password login. Ambiguous bodies are now refused. On the obsolete
+  `POST /Users/{id}/Authenticate` route, Jellyfin takes the user from the URL and ignores the
+  body, yet the exemption read the body: a non-admin could post their own id and password while
+  naming an admin in the body. The exemption now resolves that route by its id.
 - Avatar downloads now have one 5-second deadline covering the body, not only the headers.
 - Back-channel logout remembers each `jti` for the whole window in which the token is
   acceptable (keyed on `iat`), closing a replay gap.

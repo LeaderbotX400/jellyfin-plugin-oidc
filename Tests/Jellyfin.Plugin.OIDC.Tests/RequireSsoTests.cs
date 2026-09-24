@@ -95,7 +95,10 @@ public sealed class RequireSsoRouteTests
 /// </summary>
 public sealed class RequireSsoAdminExemptionTests
 {
-    private static async Task<(bool PassedThrough, int Status)> Run(string body)
+    private static readonly Guid AdminId = Guid.NewGuid();
+    private static readonly Guid VictimId = Guid.NewGuid();
+
+    private static async Task<(bool PassedThrough, int Status)> Run(string body, string path = "/Users/AuthenticateByName")
     {
         var admin = new Jellyfin.Database.Implementations.Entities.User("admin", "p", "r");
         Jellyfin.Data.UserEntityExtensions.SetPermission(
@@ -105,6 +108,8 @@ public sealed class RequireSsoAdminExemptionTests
         var users = new Moq.Mock<MediaBrowser.Controller.Library.IUserManager>();
         users.Setup(u => u.GetUserByName("admin")).Returns(admin);
         users.Setup(u => u.GetUserByName("victim")).Returns(victim);
+        users.Setup(u => u.GetUserById(AdminId)).Returns(admin);
+        users.Setup(u => u.GetUserById(VictimId)).Returns(victim);
 
         var config = new Moq.Mock<IPluginConfigProvider>();
         config.Setup(c => c.GetConfiguration()).Returns(new Configuration.PluginConfiguration
@@ -122,7 +127,7 @@ public sealed class RequireSsoAdminExemptionTests
 
         var context = new Microsoft.AspNetCore.Http.DefaultHttpContext();
         context.Request.Method = "POST";
-        context.Request.Path = "/Users/AuthenticateByName";
+        context.Request.Path = path;
         context.Request.Body = new System.IO.MemoryStream(System.Text.Encoding.UTF8.GetBytes(body));
         context.Response.Body = new System.IO.MemoryStream();
 
@@ -157,4 +162,18 @@ public sealed class RequireSsoAdminExemptionTests
         Assert.False(passed);
         Assert.Equal(403, status);
     }
+
+    [Fact]
+    public async Task ObsoleteRoute_NonAdminIdWithAdminNameInBody_IsNotExempt()
+    {
+        // Users/{userId}/Authenticate takes the user from the route and ignores the body, so the
+        // body must not be able to buy an exemption for someone else's id.
+        var (passed, status) = await Run("{\"Username\":\"admin\"}", $"/Users/{VictimId}/Authenticate");
+        Assert.False(passed);
+        Assert.Equal(403, status);
+    }
+
+    [Fact]
+    public async Task ObsoleteRoute_AdminId_IsExempt()
+        => Assert.True((await Run("{}", $"/Users/{AdminId}/Authenticate")).PassedThrough);
 }
