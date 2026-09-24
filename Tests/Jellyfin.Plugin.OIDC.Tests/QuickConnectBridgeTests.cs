@@ -214,7 +214,7 @@ public sealed class QuickConnectStateTests : IDisposable
     [Fact]
     public void QuickConnectFlagSurvivesTheRoundTrip()
     {
-        var key = _states.StoreState(NewState(true));
+        var key = _states.StoreState(NewState(true))!;
 
         var restored = _states.ConsumeState(key);
 
@@ -226,7 +226,7 @@ public sealed class QuickConnectStateTests : IDisposable
     [Fact]
     public void DefaultsToFalseForTheOrdinaryLoginFlow()
     {
-        var key = _states.StoreState(NewState(false));
+        var key = _states.StoreState(NewState(false))!;
 
         Assert.False(_states.ConsumeState(key)!.QuickConnect);
     }

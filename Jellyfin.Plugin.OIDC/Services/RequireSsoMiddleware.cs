@@ -162,7 +162,7 @@ public sealed class RequireSsoMiddleware
             return true;
         }
 
-        if (config.SsoExemptAdmins && await IsAdministratorRequestAsync(context).ConfigureAwait(false))
+        if (config.SsoExemptAdmins && await IsAdministratorTargetAsync(context).ConfigureAwait(false))
         {
             return true;
         }
@@ -193,7 +193,43 @@ public sealed class RequireSsoMiddleware
     }
 
     /// <summary>
-    /// True when the request is a password login for a user who really is a Jellyfin administrator.
+    /// True when the password login targets a user who really is a Jellyfin administrator. The
+    /// target must be read from wherever Jellyfin itself takes it, which differs by route:
+    /// Users/AuthenticateByName names the user in the body, but the obsolete
+    /// Users/{userId}/Authenticate takes it from the route and never reads the body. Reading the
+    /// body there let a non-admin post their own id and password with {"Username":"&lt;an admin&gt;"}
+    /// and be waived past the policy.
+    /// </summary>
+    private async Task<bool> IsAdministratorTargetAsync(HttpContext context)
+    {
+        if (TryGetRouteUserId(context.Request.Path.Value, out var routeUserId))
+        {
+            var user = _userManager.GetUserById(routeUserId);
+            return user is not null && user.HasPermission(
+                Jellyfin.Database.Implementations.Enums.PermissionKind.IsAdministrator);
+        }
+
+        return await IsAdministratorRequestAsync(context).ConfigureAwait(false);
+    }
+
+    /// <summary>Extracts {userId} from a Users/{userId}/Authenticate path.</summary>
+    internal static bool TryGetRouteUserId(string? path, out Guid userId)
+    {
+        userId = Guid.Empty;
+        if (string.IsNullOrEmpty(path))
+        {
+            return false;
+        }
+
+        var segments = path.Split('/', StringSplitOptions.RemoveEmptyEntries);
+        return segments.Length >= 3
+            && segments[^3].Equals("Users", StringComparison.OrdinalIgnoreCase)
+            && segments[^1].Equals("Authenticate", StringComparison.OrdinalIgnoreCase)
+            && Guid.TryParse(segments[^2], out userId);
+    }
+
+    /// <summary>
+    /// For Users/AuthenticateByName: true when the body names a user who really is an administrator.
     ///
     /// The username is read out of the request body and resolved through
     /// <see cref="IUserManager.GetUserByName"/> — an actual lookup, not a name-prefix or
@@ -215,14 +251,38 @@ public sealed class RequireSsoMiddleware
 
             context.Request.Body.Position = 0;
 
-            if (document.RootElement.ValueKind != JsonValueKind.Object
-                || !document.RootElement.TryGetProperty("Username", out var usernameElement)
-                || usernameElement.ValueKind != JsonValueKind.String)
+            if (document.RootElement.ValueKind != JsonValueKind.Object)
             {
                 return false;
             }
 
-            var username = usernameElement.GetString();
+            // Read the username the way Jellyfin's model binder will: property names match
+            // case-insensitively. An exact-case TryGetProperty("Username") let a body carry
+            // {"Username":"<an admin>","username":"<anyone>"}: this check saw the admin and waived
+            // the policy, while the binder took the other spelling and logged in "anyone" with a
+            // password. Anything other than exactly one candidate proves nothing, so it waives nothing.
+            JsonElement? usernameElement = null;
+            foreach (var property in document.RootElement.EnumerateObject())
+            {
+                if (!string.Equals(property.Name, "Username", StringComparison.OrdinalIgnoreCase))
+                {
+                    continue;
+                }
+
+                if (usernameElement is not null)
+                {
+                    return false;
+                }
+
+                usernameElement = property.Value;
+            }
+
+            if (usernameElement is not { ValueKind: JsonValueKind.String } element)
+            {
+                return false;
+            }
+
+            var username = element.GetString();
             if (string.IsNullOrEmpty(username))
             {
                 return false;

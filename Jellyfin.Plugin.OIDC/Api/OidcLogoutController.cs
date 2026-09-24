@@ -248,9 +248,13 @@ public class OidcLogoutController : ControllerBase
         // Replay check AFTER signature/lifetime/claims validation succeeded. Putting it here means
         // we don't poison the cache with attacker-controlled jti values that wouldn't have been
         // accepted anyway.
-        var expiresAt = validated.Payload.Expiration.HasValue
-            ? DateTimeOffset.FromUnixTimeSeconds(validated.Payload.Expiration.Value)
-            : DateTimeOffset.UtcNow.AddMinutes(5);
+        // Remember the jti for as long as the token could still pass validation. Acceptance is
+        // bounded by iat (at most IatSkew old, and up to IatSkew in the future), not by exp, which
+        // RFC 8935 makes optional. Keying the cache on exp, or a flat 5 minutes when exp was
+        // absent, forgot a token whose iat was skewed into the future while it was still
+        // acceptable, opening a replay window.
+        var issuedAt = new DateTimeOffset(validated.Payload.IssuedAt.ToUniversalTime(), TimeSpan.Zero);
+        var expiresAt = issuedAt + IatSkew + ExpSkew;
         if (!_replayCache.TryRegister(validated.Issuer, jti, expiresAt))
         {
             _logger.LogWarning(

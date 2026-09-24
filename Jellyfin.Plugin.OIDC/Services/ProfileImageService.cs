@@ -206,8 +206,14 @@ public sealed class ProfileImageService
             .ResolveAndValidateAsync(uri, _dnsResolver, allowPrivateAddresses: onAuthorityOrigin, cancellationToken: cancellationToken)
             .ConfigureAwait(false);
 
+        // One deadline for the whole download. HttpClient.Timeout stops applying once headers
+        // arrive when ResponseHeadersRead is used, so on its own it would let a host that drips
+        // the body a byte at a time hold the login open far past FetchTimeout.
+        using var deadline = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+        deadline.CancelAfter(FetchTimeout);
+
         using var client = _pinnedClientFactory(pinnedAddress);
-        using var response = await client.GetAsync(uri, HttpCompletionOption.ResponseHeadersRead, cancellationToken)
+        using var response = await client.GetAsync(uri, HttpCompletionOption.ResponseHeadersRead, deadline.Token)
             .ConfigureAwait(false);
 
         if (!response.IsSuccessStatusCode)
@@ -241,7 +247,7 @@ public sealed class ProfileImageService
             return;
         }
 
-        var bytes = await ReadCappedAsync(response, cancellationToken).ConfigureAwait(false);
+        var bytes = await ReadCappedAsync(response, deadline.Token).ConfigureAwait(false);
         if (bytes is null)
         {
             _logger.LogWarning(
