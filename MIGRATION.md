@@ -1,6 +1,6 @@
 # Migration Notes
 
-## Unreleased — security fixes from the 2026-09 audit
+## v1.1.0 — security fixes from the 2026-09 audit
 
 These close real vulnerabilities. Some change behaviour that deployments may have relied on
 without realising it.

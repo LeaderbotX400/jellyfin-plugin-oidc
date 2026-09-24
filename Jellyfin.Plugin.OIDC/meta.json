@@ -5,9 +5,9 @@
   "overview": "OpenID Connect SSO with granular role-to-library mapping, multi-provider support, and a full admin configuration UI.",
   "owner": "LeaderbotX400",
   "category": "Authentication",
-  "version": "1.0.1.0",
+  "version": "1.1.0.0",
   "targetAbi": "12.0.0.0",
-  "changelog": "Fix: the auto-injected SSO login buttons no longer appear on pages other than the login screen (they were attaching to item detail pages after sign-in) and are removed when you leave the login view.",
-  "timestamp": "2026-09-23T00:00:00Z",
+  "changelog": "Security release. Fixes: an SSO identity on a second provider (or SAML) could be bound into an existing account, admins included; disabled accounts could still sign in via SSO and approve Quick Connect; SAML had no login-CSRF binding and accepted a signed Response wrapped in an unsigned one; two Require-SSO admin-exemption bypasses; SSO broke on servers with a base URL. BEHAVIOUR CHANGES: a login matching no role mapping now strips permissions when RBAC is in use (the hourly re-sync applies this to stored users within about an hour of upgrading, so set a Default Role first if needed); pre-authorized users need a matching username; transient SAML NameIDs are rejected; the unusable account-link API is removed. See MIGRATION.md.",
+  "timestamp": "2026-09-24T00:00:00Z",
   "status": "Active"
 }

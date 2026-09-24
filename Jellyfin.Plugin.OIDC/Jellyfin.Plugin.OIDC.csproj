@@ -20,9 +20,9 @@
       release workflow overrides this with -p:Version=$(tag).0, so the tag is the source of
       truth for a published build and this value only matters for local/manual builds.
     -->
-    <Version>1.0.1.0</Version>
-    <AssemblyVersion>1.0.1.0</AssemblyVersion>
-    <FileVersion>1.0.1.0</FileVersion>
+    <Version>1.1.0.0</Version>
+    <AssemblyVersion>1.1.0.0</AssemblyVersion>
+    <FileVersion>1.1.0.0</FileVersion>
     <!-- Static analysis: enable built-in NetAnalyzers at the recommended rule set -->
     <AnalysisLevel>latest-recommended</AnalysisLevel>
     <!-- Treat nullable warnings as hard errors; all CS86xx must be fixed, not suppressed -->
