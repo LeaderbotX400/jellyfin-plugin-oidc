@@ -482,6 +482,28 @@ public sealed class OidcFlowTests : IClassFixture<MockIdpFixture>
     }
 
     [Fact]
+    public async Task BaseUrl_IsHonouredByRedirectUriAndCallbackPage()
+    {
+        // Jellyfin mounts everything under its configured base URL (Request.PathBase). The
+        // redirect_uri and the page's /Auth and home URLs used to be root-relative and ignore it.
+        var fixture = new TestFixture(_idp);
+        fixture.AddProvider();
+        fixture.Controller.ControllerContext.HttpContext.Request.PathBase = "/jf";
+
+        var redirect = Assert.IsType<RedirectResult>(await fixture.Controller.Start(ProviderId));
+        var redirectUri = ExtractParamFromUrl(redirect.Url, "redirect_uri");
+        Assert.EndsWith("/jf/sso/OIDC/Callback/" + ProviderId, redirectUri, StringComparison.Ordinal);
+
+        TestFixture.PropagateCookies(fixture.Controller);
+        _idp.EnqueueTokenResponse(sub: "bp-sub", username: "bp-user", nonce: ExtractNonceFromUrl(redirect.Url));
+        var content = Assert.IsType<ContentResult>(await fixture.Controller.Callback(
+            ProviderId, code: "code-bp", state: ExtractStateFromUrl(redirect.Url)));
+
+        Assert.Contains("\"/jf/sso/OIDC/Auth/" + ProviderId + "\"", content.Content, StringComparison.Ordinal);
+        Assert.Contains("\"/jf/\"", content.Content, StringComparison.Ordinal);
+    }
+
+    [Fact]
     public async Task Callback_MissingNonce_ReturnsBadRequest()
     {
         // When the IdP omits the nonce claim entirely, the controller must reject.

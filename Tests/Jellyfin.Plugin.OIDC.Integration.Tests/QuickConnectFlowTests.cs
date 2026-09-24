@@ -54,6 +54,21 @@ public class QuickConnectFlowTests : IClassFixture<MockIdpFixture>
         Assert.Contains("id=\"code\"", html, StringComparison.Ordinal);
     }
 
+    /// <summary>The bridge's own-session logout must go through the server base URL too.</summary>
+    [Fact]
+    public async Task QuickConnectPage_HonoursTheServerBaseUrl()
+    {
+        var fixture = new TestFixture(_idp);
+        fixture.AddProvider();
+        fixture.Controller.ControllerContext.HttpContext.Request.PathBase = "/jf";
+
+        var html = await RunToCallbackHtml(fixture, quickConnect: true, "qcuser-bp");
+
+        Assert.Contains("\"/jf/sso/OIDC/\"", html, StringComparison.Ordinal);
+        Assert.Contains("const serverBase = \"/jf\"", html, StringComparison.Ordinal);
+        Assert.DoesNotContain("fetch('/Sessions/Logout'", html, StringComparison.Ordinal);
+    }
+
     /// <summary>
     /// The ordinary login flow must be completely unaffected — it still gets the session-establishing
     /// page, not the code form.

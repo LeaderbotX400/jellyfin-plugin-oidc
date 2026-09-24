@@ -23,6 +23,7 @@ public class LoginButtonController : ControllerBase
     {
         var config = _configProvider.GetConfiguration();
         var providers = config.Providers.Where(p => p.Enabled).ToList();
+        var basePath = SsoPages.ServerBase(Request);
         if (providers.Count == 0)
         {
             return Content("", "application/javascript");
@@ -72,7 +73,8 @@ public class LoginButtonController : ControllerBase
                 "display:block;margin:0.5em auto;padding:0.7em 1.5em;color:#fff;text-decoration:none;border-radius:4px;font-size:1em;max-width:300px;");
             var jsonColor = JsonSerializer.Serialize(p.ButtonColor);
             sb.AppendLine(CultureInfo.InvariantCulture, $"    var btn_{p.ProviderId} = document.createElement('a');");
-            sb.AppendLine(CultureInfo.InvariantCulture, $"    btn_{p.ProviderId}.href = '/sso/OIDC/Start/{p.ProviderId}';");
+            var jsonHref = JsonSerializer.Serialize(basePath + "/sso/OIDC/Start/" + p.ProviderId);
+            sb.AppendLine(CultureInfo.InvariantCulture, $"    btn_{p.ProviderId}.href = {jsonHref};");
             sb.AppendLine(CultureInfo.InvariantCulture, $"    btn_{p.ProviderId}.textContent = {jsonLabel};");
             sb.AppendLine(CultureInfo.InvariantCulture, $"    btn_{p.ProviderId}.style.cssText = {jsonCss};");
             sb.AppendLine(CultureInfo.InvariantCulture, $"    btn_{p.ProviderId}.style.background = {jsonColor};");
@@ -81,16 +83,16 @@ public class LoginButtonController : ControllerBase
 
         // Discoverability for the Quick Connect bridge. Native clients (Android, Swiftfin,
         // Android TV) cannot show these buttons at all, so this is the path a user follows on a
-        // second device to sign a television in. Root-relative, matching the provider buttons
-        // above: this script runs inside /web/index.html, so a path-relative href would resolve
-        // against /web/ and 404.
+        // second device to sign a television in. Absolute and base-URL-prefixed, like the provider
+        // buttons above: this script runs inside /web/index.html, so a path-relative href would
+        // resolve against /web/ and 404, and a bare root-relative one misses a configured base URL.
         // No interpolation here, but assigned from a JSON literal like every other cssText in
         // this script so the "cssText is never a single-quoted interpolation" invariant that
         // LoginButtonScriptEscapingTests enforces stays trivially checkable.
         var jsonQcCss = JsonSerializer.Serialize(
             "display:block;margin:0.4em auto;text-align:center;font-size:0.9em;color:#00a4dc;");
         sb.AppendLine("    var qc = document.createElement('a');");
-        sb.AppendLine("    qc.href = '/sso/OIDC/QuickConnect';");
+        sb.AppendLine(CultureInfo.InvariantCulture, $"    qc.href = {JsonSerializer.Serialize(basePath + "/sso/OIDC/QuickConnect")};");
         sb.AppendLine("    qc.textContent = 'Sign in a TV or mobile app';");
         sb.AppendLine(CultureInfo.InvariantCulture, $"    qc.style.cssText = {jsonQcCss};");
         sb.AppendLine("    container.appendChild(qc);");
@@ -113,7 +115,8 @@ public class LoginButtonController : ControllerBase
     [HttpGet("BrandingSnippet")]
     public ActionResult GetBrandingSnippet()
     {
-        var snippet = "<script src=\"/sso/OIDC/LoginButtons\"></script>";
+        var src = System.Net.WebUtility.HtmlEncode(SsoPages.ServerBase(Request) + "/sso/OIDC/LoginButtons");
+        var snippet = $"<script src=\"{src}\"></script>";
         return Ok(new { Html = snippet, Instructions = "Add this to Jellyfin Dashboard > General > Custom CSS/HTML, or paste the <script> tag into the Login Disclaimer field under Branding." });
     }
 }

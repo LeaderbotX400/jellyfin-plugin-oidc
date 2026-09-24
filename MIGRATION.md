@@ -55,6 +55,15 @@ without realising it.
   proxy, configure `TrustForwardedHeaders` + `TrustedProxyCidrs` so clients are told apart;
   otherwise every client shares the proxy's allowance, as with the callback rate limiter.
 
+### Jellyfin base URL
+
+- **SSO now works on servers with a Jellyfin base URL** (Dashboard > Networking > Base URL). The
+  OIDC redirect URI, the SAML ACS URL, the login buttons, the branding snippet, and the
+  completion and Quick Connect pages all ignored it and pointed at root paths that 404. **If
+  you use a base URL, register the redirect URI with it included**, e.g.
+  `https://media.example.com/jellyfin/sso/OIDC/Callback/<provider>` (and the matching
+  `/jellyfin/sso/SAML/ACS/<id>` for SAML). Servers without a base URL are unaffected.
+
 ## v1.0.0 — Jellyfin 12
 
 ### What changed
