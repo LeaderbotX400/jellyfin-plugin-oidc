@@ -22,7 +22,7 @@ public class StateManagerTests
             CodeVerifier = "verifier",
             RedirectUri = "https://example.com/callback"
         };
-        var key = sm.StoreState(state);
+        var key = sm.StoreState(state)!;
         var consumed = sm.ConsumeState(key);
         Assert.NotNull(consumed);
         Assert.Equal("test", consumed.ProviderId);
@@ -40,7 +40,7 @@ public class StateManagerTests
             CodeVerifier = "cv",
             RedirectUri = "https://example.com"
         };
-        var key = sm.StoreState(state);
+        var key = sm.StoreState(state)!;
         sm.ConsumeState(key);
         var second = sm.ConsumeState(key);
         Assert.Null(second);
@@ -142,7 +142,7 @@ public class StateManagerTests
                 CodeVerifier = $"cv{i}",
                 RedirectUri = "https://example.com"
             };
-            keys.Add(sm.StoreState(state));
+            keys.Add(sm.StoreState(state)!);
         });
 
         Assert.Equal(100, keys.Count);
@@ -176,7 +176,7 @@ public class StateManagerTests
             CodeVerifier = "cv",
             RedirectUri = "https://example.com"
         };
-        var key = sm.StoreState(state);
+        var key = sm.StoreState(state)!;
 
         // RunCleanup is the same code path the loop invokes; the loop wraps it in try/catch.
         // Running it directly here verifies the method doesn't throw and the state survives
@@ -214,7 +214,7 @@ public class StateManagerTests
             CodeVerifier = "cv2",
             RedirectUri = "https://example.com"
         };
-        var key = sm.StoreState(state);
+        var key = sm.StoreState(state)!;
 
         // Call RunCleanup directly (before expiry) — state must survive
         sm.RunCleanup();
@@ -256,7 +256,7 @@ public class StateManagerTests
         //
         // The key behavioral test here: a second ConsumeState on an already-removed key
         // returns null even when the key was valid at store time.
-        var key = sm.StoreState(expiredState);
+        var key = sm.StoreState(expiredState)!;
         sm.ConsumeState(key); // first consume removes from dict
         // Second attempt: key is gone → null (not a state-replay bypass).
         Assert.Null(sm.ConsumeState(key));
