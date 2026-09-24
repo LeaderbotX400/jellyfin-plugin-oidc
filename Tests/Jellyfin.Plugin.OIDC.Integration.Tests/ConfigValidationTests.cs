@@ -56,6 +56,7 @@ public class ConfigValidationTests
             FakeJellyfinFactory.CreateUserManager(new FakeUserStore()).Object,
             FakeJellyfinFactory.CreateLibraryManager().Object,
             FakeJellyfinFactory.CreateActivityManager().Object,
+            FakeJellyfinFactory.CreateSessionManager().Object,
             configProviderMock.Object,
             NullLogger<Services.RbacService>.Instance);
 

@@ -7,6 +7,7 @@ using Jellyfin.Database.Implementations.Entities;
 using Jellyfin.Database.Implementations.Enums;
 using Jellyfin.Plugin.OIDC.Configuration;
 using MediaBrowser.Controller.Library;
+using MediaBrowser.Controller.Session;
 using MediaBrowser.Model.Activity;
 using Microsoft.Extensions.Logging;
 using SyncPlayAccess = Jellyfin.Database.Implementations.Enums.SyncPlayUserAccessType;
@@ -18,6 +19,7 @@ public class RbacService
     private readonly IUserManager _userManager;
     private readonly ILibraryManager _libraryManager;
     private readonly IActivityManager _activityManager;
+    private readonly ISessionManager _sessionManager;
     private readonly IPluginConfigProvider _configProvider;
     private readonly ILogger<RbacService> _logger;
 
@@ -25,12 +27,14 @@ public class RbacService
         IUserManager userManager,
         ILibraryManager libraryManager,
         IActivityManager activityManager,
+        ISessionManager sessionManager,
         IPluginConfigProvider configProvider,
         ILogger<RbacService> logger)
     {
         _userManager = userManager;
         _libraryManager = libraryManager;
         _activityManager = activityManager;
+        _sessionManager = sessionManager;
         _configProvider = configProvider;
         _logger = logger;
     }
@@ -71,13 +75,32 @@ public class RbacService
 
         var preview = ComputePermissions(userRoles, entitlements, providerId, config);
 
+        // RBAC is "in use" for this login when any role mapping applies to this provider, or the
+        // IdP sent entitlements. Only when neither holds is the user left untouched — that is a
+        // plain-SSO deployment, where writing the all-off result would strip playback from everyone.
+        //
+        // When RBAC is in use, a login that matches nothing is NOT a no-op: it is the signal that
+        // the user lost their groups. This used to return early, so a user removed from the IdP's
+        // admin group stayed a Jellyfin admin indefinitely, and deny-only matches were ignored. The
+        // resolver's all-off result plus any deny mappings is exactly what should be written.
+        var rbacInUse = preview.ParsedEntitlements.Length > 0
+            || config.RoleMappings.Any(m =>
+                string.IsNullOrEmpty(m.ProviderId)
+                || string.Equals(m.ProviderId, providerId, StringComparison.OrdinalIgnoreCase));
+        if (!rbacInUse)
+        {
+            _logger.LogDebug(
+                "No role mappings configured for provider {Provider} and no entitlements; leaving permissions for {Username} unchanged",
+                providerId, user.Username);
+            return;
+        }
+
         if (preview.MatchedGrantMappings.Length == 0 && preview.ParsedEntitlements.Length == 0)
         {
-            var verbose = _configProvider.GetConfiguration().VerboseClaimLogging;
+            var verbose = config.VerboseClaimLogging;
             _logger.LogInformation(
-                "No role mappings or entitlements matched for user {Username} (roleCount={RoleCount})",
+                "No role mappings or entitlements matched for user {Username} (roleCount={RoleCount}); applying deny-all baseline",
                 user.Username, LogRedaction.RedactRoles(userRoles, verbose));
-            return;
         }
 
         // Last-admin lockout protection: if the computed preview would demote this user from admin,
@@ -106,8 +129,23 @@ public class RbacService
             }
         }
 
+        var wasDisabled = user.HasPermission(PermissionKind.IsDisabled);
         ApplyToUser(user, preview, effectiveIsAdmin);
         await _userManager.UpdateUserAsync(user).ConfigureAwait(false);
+
+        // Jellyfin's per-request authorization never looks at IsDisabled, so setting the flag
+        // does not end the sessions the user already holds. When RBAC is what disabled them (the
+        // jellyfin:disabled entitlement, possibly from the resync task), revoke those tokens too.
+        if (!wasDisabled && user.HasPermission(PermissionKind.IsDisabled))
+        {
+            await _sessionManager.RevokeUserTokens(user.Id, null).ConfigureAwait(false);
+            await LogActivityAsync(
+                "OIDC-Auth disabled account",
+                "OidcAccountDisabled",
+                userId,
+                $"{user.Username} was disabled by an entitlement; existing sessions were revoked.",
+                Microsoft.Extensions.Logging.LogLevel.Warning).ConfigureAwait(false);
+        }
 
         string adminStr = preview.IsAdmin?.ToString() ?? "unchanged";
         string libsStr = preview.EnableAllLibraries switch

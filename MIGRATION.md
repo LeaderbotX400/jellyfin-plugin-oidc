@@ -28,6 +28,18 @@ without realising it.
   and had no UI, and Unlink left accounts claimable by the next new identity.
 
 
+### RBAC revocation
+
+- **A login that matches no role mapping now strips permissions** instead of leaving them as
+  they were, when RBAC is in use for that provider (at least one role mapping applies to it, or
+  the IdP sent entitlements). Previously a user removed from the IdP admin group stayed a
+  Jellyfin admin, and deny mappings matched on their own were ignored. **Before upgrading, make
+  sure every user who should keep access matches a mapping, or set a Default Role.** Otherwise
+  they drop to the all-off baseline (no playback, no libraries) **within about an hour of
+  upgrading, without logging in**: the hourly OIDC-Auth Re-sync task re-applies mappings to
+  every stored SSO user using the roles recorded at their last login. Deployments with no role
+  mappings at all are unaffected. The last-admin guard still applies.
+
 ## v1.0.0 — Jellyfin 12
 
 ### What changed

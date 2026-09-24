@@ -47,6 +47,7 @@ public sealed class RbacResyncTaskTests
         services.AddSingleton(FakeJellyfinFactory.CreateLibraryManager().Object);
         services.AddSingleton((activityMock ?? FakeJellyfinFactory.CreateActivityManager()).Object);
         services.AddSingleton<IPluginConfigProvider>(configProvider);
+        services.AddSingleton(FakeJellyfinFactory.CreateSessionManager().Object);
         services.AddLogging();
         services.AddScoped<RbacService>();
         var sp = services.BuildServiceProvider();
@@ -166,6 +167,7 @@ public sealed class RbacResyncTaskTests
         services.AddSingleton(FakeJellyfinFactory.CreateLibraryManager().Object);
         services.AddSingleton(activityMock.Object);
         services.AddSingleton<IPluginConfigProvider>(configProvider);
+        services.AddSingleton(FakeJellyfinFactory.CreateSessionManager().Object);
         services.AddLogging();
         services.AddScoped<RbacService>();
         var sp = services.BuildServiceProvider();
@@ -236,6 +238,7 @@ public sealed class RbacResyncTaskTests
         services.AddSingleton(FakeJellyfinFactory.CreateLibraryManager().Object);
         services.AddSingleton(FakeJellyfinFactory.CreateActivityManager().Object);
         services.AddSingleton<IPluginConfigProvider>(configProvider);
+        services.AddSingleton(FakeJellyfinFactory.CreateSessionManager().Object);
         services.AddLogging();
         services.AddScoped<RbacService>();
         var sp = services.BuildServiceProvider();
@@ -333,6 +336,7 @@ public sealed class RbacResyncTaskTests
         services.AddSingleton(FakeJellyfinFactory.CreateLibraryManager().Object);
         services.AddSingleton(activityMock.Object);
         services.AddSingleton<IPluginConfigProvider>(configProvider);
+        services.AddSingleton(FakeJellyfinFactory.CreateSessionManager().Object);
         services.AddLogging();
         services.AddScoped<RbacService>();
         var sp = services.BuildServiceProvider();
@@ -394,6 +398,7 @@ public sealed class RbacResyncTaskTests
         services.AddSingleton(FakeJellyfinFactory.CreateLibraryManager().Object);
         services.AddSingleton(activityManager.Object);
         services.AddSingleton<IPluginConfigProvider>(configProvider);
+        services.AddSingleton(FakeJellyfinFactory.CreateSessionManager().Object);
         services.AddLogging();
         services.AddScoped<RbacService>();
         var sp = services.BuildServiceProvider();
@@ -487,6 +492,7 @@ public sealed class RbacResyncTaskTests
         services.AddSingleton(FakeJellyfinFactory.CreateLibraryManager().Object);
         services.AddSingleton(activityMock.Object);
         services.AddSingleton<IPluginConfigProvider>(configProvider);
+        services.AddSingleton(FakeJellyfinFactory.CreateSessionManager().Object);
         services.AddLogging();
         services.AddScoped<RbacService>();
         var sp = services.BuildServiceProvider();
