@@ -437,6 +437,51 @@ public sealed class OidcFlowTests : IClassFixture<MockIdpFixture>
     }
 
     [Fact]
+    public async Task Callback_EmptySub_ReturnsBadRequest()
+    {
+        // sub is the only identity key. A sub-less token would link under "{provider}:", a key
+        // every other sub-less login would share.
+        var fixture = new TestFixture(_idp);
+        fixture.AddProvider();
+
+        var redirect = Assert.IsType<RedirectResult>(await fixture.Controller.Start(ProviderId));
+        TestFixture.PropagateCookies(fixture.Controller);
+        _idp.EnqueueTokenResponse(sub: "", username: "no-sub-user", nonce: ExtractNonceFromUrl(redirect.Url));
+
+        var callbackResult = await fixture.Controller.Callback(ProviderId, code: "code-no-sub", state: ExtractStateFromUrl(redirect.Url));
+
+        Assert.IsType<BadRequestObjectResult>(callbackResult);
+        Assert.Null(fixture.UserStore.GetByName("no-sub-user"));
+    }
+
+    [Fact]
+    public async Task Authenticate_DisabledUser_Returns403AndNoSession()
+    {
+        // Jellyfin's AuthenticateDirect does not check IsDisabled; the plugin must.
+        var fixture = new TestFixture(_idp);
+        fixture.AddProvider();
+        await fixture.RunFullFlow("disabled-later", "sub-disabled-later");
+        var user = fixture.UserStore.GetByName("disabled-later")!;
+        user.SetPermission(PermissionKind.IsDisabled, true);
+
+        var redirect = Assert.IsType<RedirectResult>(await fixture.Controller.Start(ProviderId));
+        TestFixture.PropagateCookies(fixture.Controller);
+        _idp.EnqueueTokenResponse(sub: "sub-disabled-later", username: "disabled-later", nonce: ExtractNonceFromUrl(redirect.Url));
+        var content = Assert.IsType<ContentResult>(await fixture.Controller.Callback(
+            ProviderId, code: "code-disabled", state: ExtractStateFromUrl(redirect.Url)));
+        var token = TestFixture.ExtractSessionTokenFromHtml(content.Content!);
+
+        var sessionManager = fixture.SessionManagerMock;
+        sessionManager.Invocations.Clear();
+
+        var result = Assert.IsType<ObjectResult>(await fixture.Controller.Authenticate(
+            ProviderId, new AuthenticateRequest { Token = token, DeviceId = "dev" }));
+
+        Assert.Equal(403, result.StatusCode);
+        sessionManager.Verify(s => s.AuthenticateDirect(It.IsAny<AuthenticationRequest>()), Times.Never);
+    }
+
+    [Fact]
     public async Task Callback_MissingNonce_ReturnsBadRequest()
     {
         // When the IdP omits the nonce claim entirely, the controller must reject.
@@ -675,6 +720,7 @@ public sealed class OidcFlowTests : IClassFixture<MockIdpFixture>
         user.Permissions.FirstOrDefault(p => p.Kind == kind)?.Value ?? false;
 
     private static string ExtractStateFromUrl(string url) => ExtractParamFromUrl(url, "state");
+    private static string ExtractNonceFromUrl(string url) => ExtractParamFromUrl(url, "nonce");
 
     private static string ExtractParamFromUrl(string url, string name)
     {

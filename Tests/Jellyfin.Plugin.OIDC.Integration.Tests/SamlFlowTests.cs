@@ -61,7 +61,8 @@ public sealed class SamlFlowTests : IClassFixture<MockIdpFixture>
     /// NotOnOrAfter), sign the assertion, and return base64.
     /// </summary>
     private static string BuildAndSignResponse(string nameId, IEnumerable<string> roles, string requestId,
-        string? email = null, string assertionId = "_assert1")
+        string? email = null, string assertionId = "_assert1",
+        string nameIdFormat = "urn:oasis:names:tc:SAML:1.1:nameid-format:unspecified")
     {
         var groupValues = string.Join(string.Empty,
             roles.Select(r => $"<saml:AttributeValue>{r}</saml:AttributeValue>"));
@@ -77,7 +78,7 @@ public sealed class SamlFlowTests : IClassFixture<MockIdpFixture>
             $"<saml:Assertion ID=\"{assertionId}\" Version=\"2.0\" IssueInstant=\"2025-01-01T00:00:00Z\">" +
             $"<saml:Issuer>{IdpEntityId}</saml:Issuer>" +
             "<saml:Subject>" +
-            $"<saml:NameID Format=\"urn:oasis:names:tc:SAML:1.1:nameid-format:unspecified\">{nameId}</saml:NameID>" +
+            $"<saml:NameID Format=\"{nameIdFormat}\">{nameId}</saml:NameID>" +
             "<saml:SubjectConfirmation Method=\"urn:oasis:names:tc:SAML:2.0:cm:bearer\">" +
             $"<saml:SubjectConfirmationData Recipient=\"{AcsUrl}\" InResponseTo=\"{requestId}\" NotOnOrAfter=\"2099-12-31T23:59:59Z\"/>" +
             "</saml:SubjectConfirmation>" +
@@ -169,6 +170,24 @@ public sealed class SamlFlowTests : IClassFixture<MockIdpFixture>
         var user = fixture.UserStore.GetByName("saml-user-1");
         Assert.NotNull(user);
         Assert.Contains(user!.Permissions, p => p.Kind == PermissionKind.IsAdministrator && p.Value);
+    }
+
+    [Theory]
+    [InlineData(" ", "urn:oasis:names:tc:SAML:2.0:nameid-format:persistent")]
+    [InlineData("tr-8f2c", "urn:oasis:names:tc:SAML:2.0:nameid-format:transient")]
+    public async Task AcsFlow_UnusableNameId_IsRejected(string nameId, string format)
+    {
+        // NameID is the identity key. An empty one would be shared by every such assertion; a
+        // transient one changes on each login and can never identify the same account twice.
+        var fixture = new TestFixture(_idp);
+        AddSignedSamlProvider(fixture);
+        var (relayState, requestId) = InitiateSpFlow(fixture);
+
+        var samlResponse = BuildAndSignResponse(
+            nameId: nameId, roles: Array.Empty<string>(), requestId: requestId, nameIdFormat: format);
+        var acsResult = await fixture.SamlController.AssertionConsumerService(ProviderId, samlResponse, relayState);
+
+        Assert.IsType<BadRequestObjectResult>(acsResult);
     }
 
     [Fact]

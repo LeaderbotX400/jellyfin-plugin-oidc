@@ -9,6 +9,7 @@ using Jellyfin.Plugin.OIDC.Configuration;
 using Jellyfin.Plugin.OIDC.Services;
 using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Mvc;
+using MediaBrowser.Controller.Session;
 using MediaBrowser.Model.Activity;
 using Microsoft.Extensions.Logging.Abstractions;
 using Moq;
@@ -33,6 +34,7 @@ internal sealed class TestFixture
     public AuthorizationCodeCache CodeCache { get; }
     public CallbackRateLimiter RateLimiter { get; }
     public Mock<IActivityManager> ActivityManagerMock { get; }
+    public Mock<ISessionManager> SessionManagerMock { get; }
     public ProfileImageService ProfileImageService { get; }
     public Mock<MediaBrowser.Controller.Providers.IProviderManager> ProviderManagerMock { get; }
 
@@ -50,6 +52,7 @@ internal sealed class TestFixture
 
         var userManagerMock = FakeJellyfinFactory.CreateUserManager(UserStore.Inner);
         var sessionManagerMock = FakeJellyfinFactory.CreateSessionManager();
+        SessionManagerMock = sessionManagerMock;
         var libraryManagerMock = FakeJellyfinFactory.CreateLibraryManager();
         var activityManagerMock = FakeJellyfinFactory.CreateActivityManager();
         ActivityManagerMock = activityManagerMock;

@@ -27,6 +27,8 @@ public class SamlController : ControllerBase
     /// <summary>Cap on RelayState — only a few KB are ever legitimate.</summary>
     private const int MaxRelayStateBytes = 8 * 1024;
 
+    private const string TransientNameIdFormat = "urn:oasis:names:tc:SAML:2.0:nameid-format:transient";
+
     private readonly UserSyncService _userSyncService;
     private readonly StateManager _stateManager;
     private readonly ISessionManager _sessionManager;
@@ -179,6 +181,22 @@ public class SamlController : ControllerBase
             return BadRequest("SAML assertion has already been consumed (replay).");
         }
 
+        // NameID is the identity key — accounts are linked on "saml:{provider}:{NameID}". Without
+        // one, every such assertion would share the key "saml:{provider}:" and log into whichever
+        // account claimed it first. It must also be persistent: a transient NameID changes on every
+        // login and can never resolve to the same account twice.
+        if (string.IsNullOrWhiteSpace(assertion.NameId))
+        {
+            _logger.LogWarning("SAML: rejecting assertion with no NameID (provider={Provider})", providerId);
+            return BadRequest("SAML assertion has no NameID; configure the IdP to send a persistent NameID.");
+        }
+
+        if (string.Equals(assertion.NameIdFormat, TransientNameIdFormat, StringComparison.Ordinal))
+        {
+            _logger.LogWarning("SAML: rejecting transient NameID (provider={Provider})", providerId);
+            return BadRequest("SAML assertion uses a transient NameID; configure the IdP to send a persistent NameID.");
+        }
+
         // Resolve username: named attribute takes precedence over NameID
         var username = assertion.NameId;
         if (!string.Equals(provider.UsernameClaim, "NameID", StringComparison.OrdinalIgnoreCase) &&
@@ -282,6 +300,19 @@ public class SamlController : ControllerBase
                 message = ex.Message
             });
         }
+        catch (OidcUserDisabledException ex)
+        {
+            _logger.LogWarning(
+                "SAML login rejected: account '{Username}' is disabled (provider={Provider})",
+                ex.Username, providerId);
+            await _rbacService.LogActivityAsync(
+                $"SAML login rejected: account '{ex.Username}' is disabled",
+                "SamlLoginDisabledUser",
+                Guid.Empty,
+                $"Provider: {providerId}",
+                Microsoft.Extensions.Logging.LogLevel.Warning).ConfigureAwait(false);
+            return StatusCode(403, new { error = "account_disabled", message = "This account is disabled." });
+        }
         catch (InvalidOperationException ex)
         {
             _logger.LogWarning("SAML user sync failed: {Message}", ex.Message);
@@ -368,7 +399,7 @@ public class SamlController : ControllerBase
                 })
             })
             .then(function(r) {
-                if (r.status === 409) {
+                if (r.status === 409 || r.status === 403) {
                     return r.json().then(function(body) {
                         throw new Error(body && body.message ? body.message : 'Account collision');
                     });

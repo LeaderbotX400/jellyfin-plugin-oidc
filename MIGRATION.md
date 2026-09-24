@@ -1,5 +1,33 @@
 # Migration Notes
 
+## Unreleased — security fixes from the 2026-09 audit
+
+These close real vulnerabilities. Some change behaviour that deployments may have relied on
+without realising it.
+
+### Identity binding
+
+- **Pre-authorized users need a matching username and no prior SSO owner.** Setting a user's
+  Authentication Provider to OIDC-Auth still pre-authorizes them, but only for an SSO login
+  whose username equals the Jellyfin username (case-insensitive), and only if that user has
+  never been bound to any SSO identity. Previously the pin alone was enough, and since the plugin
+  pins every user it creates, a new identity on a second provider (or a SAML provider) could
+  be bound into an existing user's account — including an administrator's.
+- **Disabled accounts can no longer sign in through SSO.** Jellyfin enforces the disabled flag
+  only on password logins; the plugin now refuses SSO logins and Quick Connect approvals for
+  disabled users (HTTP 403, activity-log entry `OidcLoginDisabledUser` / `SamlLoginDisabledUser`).
+  RBAC also no longer clears the flag: the default RBAC mode used to set `IsDisabled=false` on
+  every matched login, re-enabling accounts an admin had disabled. The `jellyfin:disabled`
+  entitlement still disables.
+- **Tokens without `sub`, and SAML assertions without a persistent NameID, are rejected.** The
+  subject is the account key. A missing one was shared by every such login. A transient NameID
+  (`urn:oasis:names:tc:SAML:2.0:nameid-format:transient`) changes on every login; it only ever
+  "worked" through the takeover bug above. Configure the IdP to send a persistent NameID.
+- **The account-linking API is removed** (`POST /sso/OIDC/link/start/{id}`,
+  `DELETE /sso/OIDC/link/{id}`, `GET /sso/OIDC/links`). It could not be completed from a browser
+  and had no UI, and Unlink left accounts claimable by the next new identity.
+
+
 ## v1.0.0 — Jellyfin 12
 
 ### What changed

@@ -55,33 +55,6 @@ public class OidcUserStoreTests : IDisposable
     }
 
     [Fact]
-    public async Task UnlinkAsync_RemovesLink()
-    {
-        var store = MakeStore();
-        var userId = Guid.NewGuid();
-
-        await store.LinkAsync(userId, "sub-abc", "prov1");
-        await store.UnlinkAsync(userId, "prov1");
-        var result = await store.GetLinkedUserIdAsync("sub-abc", "prov1");
-
-        Assert.Null(result);
-    }
-
-    [Fact]
-    public async Task UnlinkAsync_OnlyRemovesMatchingProvider()
-    {
-        var store = MakeStore();
-        var userId = Guid.NewGuid();
-
-        await store.LinkAsync(userId, "sub-abc", "prov1");
-        await store.LinkAsync(userId, "sub-abc", "prov2");
-        await store.UnlinkAsync(userId, "prov1");
-
-        Assert.Null(await store.GetLinkedUserIdAsync("sub-abc", "prov1"));
-        Assert.Equal(userId, await store.GetLinkedUserIdAsync("sub-abc", "prov2"));
-    }
-
-    [Fact]
     public async Task GetLinksForUser_ReturnsAllLinks()
     {
         var store = MakeStore();
@@ -166,16 +139,6 @@ public class OidcUserStoreTests : IDisposable
     }
 
     [Fact]
-    public async Task UnlinkAsync_UserWithNoLinks_IsIdempotent()
-    {
-        // Calling Unlink for a user who has no links must not throw.
-        var store = MakeStore();
-        var userId = Guid.NewGuid();
-        var ex = await Record.ExceptionAsync(() => store.UnlinkAsync(userId, "any-provider"));
-        Assert.Null(ex);
-    }
-
-    [Fact]
     public async Task LinkAsync_MultipleLinksForSameUser_AllRetrievable()
     {
         var store = MakeStore();
@@ -190,6 +153,104 @@ public class OidcUserStoreTests : IDisposable
         Assert.Contains(links, l => l.ProviderId == "prov-x" && l.Sub == "sub-x");
         Assert.Contains(links, l => l.ProviderId == "prov-y" && l.Sub == "sub-y");
         Assert.Contains(links, l => l.ProviderId == "prov-z" && l.Sub == "sub-z");
+    }
+
+    [Fact]
+    public async Task UnreadableStoreFile_FailsClosed_AndIsNotOverwritten()
+    {
+        // An unreadable file used to be treated as an empty store, so the next write replaced it
+        // and erased every sub→user link. Unix-only: relies on file mode bits, and root ignores them.
+        if (OperatingSystem.IsWindows() || Environment.UserName == "root") return;
+
+        var path = Path.Combine(_tempDir, $"store_{Guid.NewGuid():N}.json");
+        var owner = Guid.NewGuid();
+        await new OidcUserStore(path).LinkAsync(owner, "sub-owner", "p");
+
+        File.SetUnixFileMode(path, UnixFileMode.None);
+        try
+        {
+            var store = new OidcUserStore(path);
+            await Assert.ThrowsAsync<OidcUserStoreUnavailableException>(
+                () => store.LinkAsync(Guid.NewGuid(), "sub-other", "p"));
+        }
+        finally
+        {
+            File.SetUnixFileMode(path, UnixFileMode.UserRead | UnixFileMode.UserWrite);
+        }
+
+        Assert.Equal(owner, await new OidcUserStore(path).GetLinkedUserIdAsync("sub-owner", "p"));
+    }
+
+    [Fact]
+    public async Task GetLinksForUser_SamlProvider_ReportsFullProviderId()
+    {
+        // SAML links are stored under "saml:{id}". Splitting at the first colon used to report
+        // them as provider "saml", which no caller matched — so a SAML-linked user always looked
+        // unlinked to the pre-authorized-binding check.
+        var store = MakeStore();
+        var userId = Guid.NewGuid();
+
+        await store.LinkAsync(userId, "name:with:colons", "saml:corp");
+
+        var links = await store.GetLinksForUserAsync(userId);
+        var link = Assert.Single(links);
+        Assert.Equal("saml:corp", link.ProviderId);
+        Assert.Equal("name:with:colons", link.Sub);
+    }
+
+    [Fact]
+    public async Task LinkKey_SamlProvider_SurvivesReload()
+    {
+        // Upgrade path: keys already on disk as "saml:x:sub" keep resolving.
+        var path = Path.Combine(_tempDir, $"store_{Guid.NewGuid():N}.json");
+        var userId = Guid.NewGuid();
+        await new OidcUserStore(path).LinkAsync(userId, "nameid-1", "saml:corp");
+
+        var reloaded = new OidcUserStore(path);
+        Assert.Equal(userId, await reloaded.GetLinkedUserIdAsync("nameid-1", "saml:corp"));
+        Assert.Equal("saml:corp", Assert.Single(await reloaded.GetLinksForUserAsync(userId)).ProviderId);
+    }
+
+    [Theory]
+    [InlineData("prov:sub", "prov", "sub")]
+    [InlineData("prov:a:b", "prov", "a:b")]
+    [InlineData("saml:x:sub", "saml:x", "sub")]
+    [InlineData("saml:x:a:b", "saml:x", "a:b")]
+    public void TrySplitLinkKey_SplitsAtTheProviderBoundary(string key, string provider, string sub)
+    {
+        Assert.True(OidcUserStore.TrySplitLinkKey(key, out var p, out var s));
+        Assert.Equal(provider, p);
+        Assert.Equal(sub, s);
+    }
+
+    [Theory]
+    [InlineData("nocolon")]
+    [InlineData(":sub")]
+    [InlineData("saml:")]
+    public void TrySplitLinkKey_RejectsMalformedKeys(string key)
+    {
+        Assert.False(OidcUserStore.TrySplitLinkKey(key, out _, out _));
+    }
+
+    [Fact]
+    public async Task ConcurrentMutations_DoNotRaceTheSerializer()
+    {
+        // RecordSidAsync used to mutate a record's sid Dictionary outside the write lock while
+        // PersistAsync serialized it on another thread ("Collection was modified").
+        var store = MakeStore();
+        var userId = Guid.NewGuid();
+        await store.UpsertAsync(new OidcUserRecord { UserId = userId, Sub = "s", ProviderId = "p" });
+
+        var tasks = Enumerable.Range(0, 200).Select(i => (i % 3) switch
+        {
+            0 => store.RecordSidAsync(userId, "sid-" + i, "dev-" + i),
+            1 => store.RecordProfileImageAsync(userId, "https://idp/a" + i, "h" + i),
+            _ => store.UpsertAsync(new OidcUserRecord { UserId = userId, Sub = "s", ProviderId = "p" }),
+        });
+
+        var ex = await Record.ExceptionAsync(() => Task.WhenAll(tasks));
+        Assert.Null(ex);
+        Assert.NotNull(await store.GetBySidAsync("sid-0", "p"));
     }
 
     // ── Atomic write tests ─────────────────────────────────────────────────
@@ -276,8 +337,6 @@ public class OidcUserStoreTests : IDisposable
             () => store.GetLinkedUserIdAsync("s", "p"));
         await Assert.ThrowsAsync<OidcUserStoreUnavailableException>(
             () => store.LinkAsync(Guid.NewGuid(), "s", "p"));
-        await Assert.ThrowsAsync<OidcUserStoreUnavailableException>(
-            () => store.UnlinkAsync(Guid.NewGuid(), "p"));
         await Assert.ThrowsAsync<OidcUserStoreUnavailableException>(
             () => store.GetLinksForUserAsync(Guid.NewGuid()));
         await Assert.ThrowsAsync<OidcUserStoreUnavailableException>(

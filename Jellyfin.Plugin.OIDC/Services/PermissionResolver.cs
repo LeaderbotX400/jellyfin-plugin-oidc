@@ -107,7 +107,10 @@ public static class PermissionResolver
 
         var isAdmin = Resolve(merged.IsAdmin, entSet.IsAdmin, deny?.IsAdmin);
         // Entitlement-only permissions (no parallel field in RoleMapping). grant=false always.
-        var isDisabled = Resolve(false, entSet.IsDisabled, false);
+        // IsDisabled is one-way: an entitlement may disable a user, but the plugin never clears the
+        // flag. Resolving it like the other fields wrote false on every login in the authoritative
+        // mode, silently re-enabling accounts an administrator had disabled in Jellyfin.
+        bool? isDisabled = entSet.IsDisabled ? true : null;
         var isHidden = Resolve(merged.IsHidden, entSet.IsHidden, deny?.IsHidden);
         var syncTranscode = Resolve(false, entSet.EnableSyncTranscoding, false);
         var forceRemoteTranscode = Resolve(false, entSet.ForceRemoteSourceTranscoding, false);

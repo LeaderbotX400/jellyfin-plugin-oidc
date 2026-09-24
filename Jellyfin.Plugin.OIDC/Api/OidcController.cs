@@ -11,6 +11,8 @@ using System.Threading;
 using System.Threading.Tasks;
 using IdentityModel;
 using IdentityModel.Client;
+using Jellyfin.Data;
+using Jellyfin.Database.Implementations.Enums;
 using Jellyfin.Plugin.OIDC;
 using Jellyfin.Plugin.OIDC.Configuration;
 using Jellyfin.Plugin.OIDC.Services;
@@ -327,7 +329,7 @@ public class OidcController : ControllerBase
         }
 
         // Nonce MUST be present AND match — no short-circuit for empty nonce.
-        // OidcState.Nonce is required (always set in /Start and /LinkStart), so this
+        // OidcState.Nonce is required (always set in /Start), so this
         // guard catches both a missing nonce claim and a value mismatch.
         var nonceClaim = idToken.Claims.FirstOrDefault(c => c.Type == "nonce")?.Value;
         if (string.IsNullOrEmpty(nonceClaim) || nonceClaim != oidcState.Nonce)
@@ -372,7 +374,16 @@ public class OidcController : ControllerBase
             }
         }
 
+        // sub is the ONLY identity key: accounts are linked on "{provider}:{sub}". OIDC Core makes
+        // it mandatory, but a token without one would otherwise link under "{provider}:" — a key
+        // every other sub-less login would share, logging each into the first one's account.
         var sub = ClaimParser.ExtractClaim(idToken, "sub");
+        if (string.IsNullOrWhiteSpace(sub))
+        {
+            _logger.LogWarning("OIDC login rejected: id_token has no sub claim (provider {Provider})", providerId);
+            return BadRequest("Identity token has no subject (sub) claim");
+        }
+
         var sid = ClaimParser.ExtractClaim(idToken, "sid") ?? string.Empty;
         var username = ClaimParser.ExtractClaim(idToken, provider.UsernameClaim);
         if (string.IsNullOrEmpty(username))
@@ -499,7 +510,6 @@ public class OidcController : ControllerBase
             Sid = sid,
             Roles = roles,
             Entitlements = entitlements,
-            LinkUserId = oidcState.LinkingForUserId,
             Email = emailClaim,
             EmailVerified = emailVerified,
             PictureUrl = pictureUrl
@@ -600,17 +610,6 @@ public class OidcController : ControllerBase
 
         try
         {
-            // C.2 — handle account linking if this is a link flow
-            if (session.LinkUserId.HasValue)
-            {
-                await _userStore.LinkAsync(session.LinkUserId.Value, session.Sub, providerId)
-                    .ConfigureAwait(false);
-                _logger.LogInformation(
-                    "Linked user {UserId} to OIDC sub={Sub} provider={Provider}",
-                    session.LinkUserId.Value, session.Sub, providerId);
-                return Ok(new { Linked = true, Sub = session.Sub });
-            }
-
             var userId = await _userSyncService.SyncUserAsync(
                 session.Username,
                 session.DisplayName,
@@ -671,6 +670,19 @@ public class OidcController : ControllerBase
                 message = ex.Message
             });
         }
+        catch (OidcUserDisabledException ex)
+        {
+            _logger.LogWarning(
+                "OIDC login rejected: account '{Username}' is disabled (provider={Provider})",
+                ex.Username, providerId);
+            await _rbacService.LogActivityAsync(
+                $"OIDC login rejected: account '{ex.Username}' is disabled",
+                "OidcLoginDisabledUser",
+                Guid.Empty,
+                $"Provider: {providerId}",
+                Microsoft.Extensions.Logging.LogLevel.Warning).ConfigureAwait(false);
+            return StatusCode(403, new { error = "account_disabled", message = "This account is disabled." });
+        }
         catch (OidcUserStoreUnavailableException ex)
         {
             _logger.LogError(ex, "OIDC user store is unavailable — login rejected for {Username}", session.Username);
@@ -708,83 +720,6 @@ public class OidcController : ControllerBase
             });
 
         return Ok(providers);
-    }
-
-    // ── Account linking endpoints ─────────────────────────────────────────────
-
-    // Link flow uses POST (not GET) to defeat naive cross-site request forgery:
-    // a malicious <img src="...link/start/..."> or top-level link cannot trigger this endpoint
-    // without an attacker-controlled origin running JS that already passes [Authorize]'s
-    // bearer token. We also require Content-Type: application/json so a cross-origin form POST
-    // (which browsers WILL send without preflight for x-www-form-urlencoded / multipart /
-    // text-plain) cannot reach it — only same-origin JS with the Jellyfin token works.
-    //
-    // Trade-off (documented per spec): a full anti-CSRF token-pair would be the gold standard,
-    // but Jellyfin's auth token is delivered via header (not cookie) so it's already not
-    // automatically attached cross-site. The POST + JSON-only requirement closes the remaining
-    // hole — a victim browser cannot be tricked into completing a link-to-attacker-IdP flow.
-    [HttpPost("link/start/{providerId}")]
-    [Authorize]
-    [Consumes("application/json")]
-    public async Task<ActionResult> LinkStart(string providerId)
-    {
-        if (!ProviderIdValidation.IsValid(providerId))
-        {
-            return BadRequest($"Invalid provider id (must be {ProviderIdValidation.CharsetDescription})");
-        }
-
-        var provider = GetProvider(providerId);
-        if (provider == null)
-        {
-            return NotFound($"Provider '{providerId}' not found or disabled");
-        }
-
-        // Identify the currently authenticated Jellyfin user
-        var jellyfinUserId = GetCurrentUserId();
-        if (jellyfinUserId == null)
-        {
-            return Unauthorized("Could not determine current user");
-        }
-
-        var disco = await GetDiscoveryDocumentAsync(provider).ConfigureAwait(false);
-        if (disco.IsError)
-        {
-            return StatusCode(502, "Failed to contact identity provider");
-        }
-
-        var codeVerifier = CryptoRandom.CreateUniqueId(64);
-        var codeChallenge = CreateCodeChallenge(codeVerifier);
-        var nonce = CryptoRandom.CreateUniqueId(32);
-        var redirectUri = BuildCallbackUri(providerId);
-
-        // Same CSRF-binding cookie as the login flow — the IdP redirect lands on /Callback,
-        // which checks the cookie hash before honouring the state.
-        var csrfToken = StateManager.GenerateCsprngToken();
-        var csrfHash = StateManager.HashToken(csrfToken);
-        SetCsrfBindingCookie(providerId, csrfToken);
-
-        var stateKey = _stateManager.StoreState(new OidcState
-        {
-            ProviderId = providerId,
-            Nonce = nonce,
-            CodeVerifier = codeVerifier,
-            RedirectUri = redirectUri,
-            LinkingForUserId = jellyfinUserId.Value,
-            CsrfBindingHash = csrfHash
-        });
-
-        var authorizeUrl = new RequestUrl(disco.AuthorizeEndpoint!);
-        var url = authorizeUrl.CreateAuthorizeUrl(
-            clientId: provider.ClientId,
-            responseType: OidcConstants.ResponseTypes.Code,
-            scope: provider.Scopes,
-            redirectUri: redirectUri,
-            state: stateKey,
-            nonce: nonce,
-            codeChallenge: codeChallenge,
-            codeChallengeMethod: OidcConstants.CodeChallengeMethods.Sha256);
-
-        return Redirect(url);
     }
 
     // ── Quick Connect bridge ────────────────────────────────────────────────
@@ -837,6 +772,14 @@ public class OidcController : ControllerBase
         if (string.IsNullOrEmpty(code))
         {
             return BadRequest(new { error = "missing_code", message = "Enter the code shown on your device." });
+        }
+
+        // The caller's token is valid, but Jellyfin's authorization handler does not check
+        // IsDisabled — so a disabled account holding a live token could otherwise sign a device in.
+        var caller = _userManager.GetUserById(userId.Value);
+        if (caller is null || caller.HasPermission(PermissionKind.IsDisabled))
+        {
+            return StatusCode(403, new { error = "account_disabled", message = "This account is disabled." });
         }
 
         if (_qcAttemptLimiter.IsBlocked(userId.Value, out var retryAfter))
@@ -910,54 +853,6 @@ public class OidcController : ControllerBase
         return Ok(new { Authorized = true });
     }
 
-    [HttpDelete("link/{providerId}")]
-    [Authorize]
-    public async Task<ActionResult> Unlink(string providerId)
-    {
-        var jellyfinUserId = GetCurrentUserId();
-        if (jellyfinUserId == null)
-        {
-            return Unauthorized();
-        }
-
-        try
-        {
-            await _userStore.UnlinkAsync(jellyfinUserId.Value, providerId).ConfigureAwait(false);
-        }
-        catch (OidcUserStoreUnavailableException ex)
-        {
-            _logger.LogError(ex, "OIDC user store unavailable during Unlink for user {UserId}", jellyfinUserId.Value);
-            return StatusCode(503, "OIDC user store is unavailable. Contact an administrator.");
-        }
-
-        _logger.LogInformation("Unlinked user {UserId} from provider {Provider}", jellyfinUserId.Value, providerId);
-        return Ok();
-    }
-
-    [HttpGet("links")]
-    [Authorize]
-    public async Task<ActionResult> GetLinks()
-    {
-        var jellyfinUserId = GetCurrentUserId();
-        if (jellyfinUserId == null)
-        {
-            return Unauthorized();
-        }
-
-        IReadOnlyList<(string ProviderId, string Sub)> links;
-        try
-        {
-            links = await _userStore.GetLinksForUserAsync(jellyfinUserId.Value).ConfigureAwait(false);
-        }
-        catch (OidcUserStoreUnavailableException ex)
-        {
-            _logger.LogError(ex, "OIDC user store unavailable during GetLinks for user {UserId}", jellyfinUserId.Value);
-            return StatusCode(503, "OIDC user store is unavailable. Contact an administrator.");
-        }
-
-        return Ok(links.Select(l => new { l.ProviderId, l.Sub }));
-    }
-
     // ── Helpers ──────────────────────────────────────────────────────────────
 
     /// <summary>
@@ -968,7 +863,7 @@ public class OidcController : ControllerBase
     /// none of the standard identity claim types, so checking only NameIdentifier/uid/sub — as
     /// this did — always returned null, and every [Authorize] endpoint here answered
     /// "Could not determine current user" for a perfectly valid session. Caught by exercising the
-    /// Quick Connect bridge against a real Jellyfin 12; it silently affected Link and Unlink too.
+    /// Quick Connect bridge against a real Jellyfin 12.
     ///
     /// The standard claim types are kept as fallbacks in case a future Jellyfin adds them.
     /// </summary>
@@ -1480,7 +1375,7 @@ public class OidcController : ControllerBase
                 })
             })
             .then(function(r) {
-                if (r.status === 409) {
+                if (r.status === 409 || r.status === 403) {
                     return r.json().then(function(body) {
                         throw new Error(body && body.message ? body.message : 'Account collision');
                     });
@@ -1489,12 +1384,6 @@ public class OidcController : ControllerBase
                 return r.json();
             })
             .then(function(auth) {
-                // Link flow returns {Linked: true} instead of a session
-                if (auth.Linked) {
-                    document.getElementById('status').textContent = 'Account linked successfully!';
-                    setTimeout(function() { window.close(); }, 2000);
-                    return;
-                }
                 var credentials = {
                     Servers: [{
                         ManualAddress: window.location.origin,
