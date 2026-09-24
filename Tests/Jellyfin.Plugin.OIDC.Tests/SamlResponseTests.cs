@@ -167,6 +167,44 @@ public class SamlResponseTests
         return null;
     }
 
+    // ── Signed Response must be the document root ────────────────────────────────────────
+
+    private static XmlDocument SignedResponseDoc()
+    {
+        var doc = new XmlDocument { PreserveWhitespace = true };
+        doc.LoadXml(new ResponseBuilder().BuildXml());
+        SignElement(doc, "_resp1", SignedXml.XmlDsigRSASHA256Url, "http://www.w3.org/2001/04/xmlenc#sha256");
+        return doc;
+    }
+
+    [Fact]
+    public void Parse_SignedResponseAtRoot_Succeeds()
+    {
+        var assertion = SamlResponse.Parse(
+            ToBase64(SignedResponseDoc().OuterXml), MakeProvider(), SpContext(), NullLogger.Instance);
+        Assert.Equal("alice", assertion.NameId);
+    }
+
+    [Fact]
+    public void Parse_SignedResponseInsideUnsignedWrapper_IsRejected()
+    {
+        // The Response-level checks read the document root. Nesting the genuine signed Response
+        // inside an attacker-authored one must not let those checks read the wrapper.
+        var signed = SignedResponseDoc();
+        var wrapper = new XmlDocument { PreserveWhitespace = true };
+        wrapper.LoadXml(
+            "<samlp:Response xmlns:samlp=\"urn:oasis:names:tc:SAML:2.0:protocol\" xmlns:saml=\"urn:oasis:names:tc:SAML:2.0:assertion\" " +
+            $"ID=\"_evil\" Version=\"2.0\" IssueInstant=\"2025-01-01T00:00:00Z\" Destination=\"{AcsUrl}\" InResponseTo=\"{RequestId}\">" +
+            $"<saml:Issuer>{IdpEntityId}</saml:Issuer>" +
+            "<samlp:Status><samlp:StatusCode Value=\"urn:oasis:names:tc:SAML:2.0:status:Success\"/></samlp:Status>" +
+            "<samlp:Extensions/></samlp:Response>");
+        wrapper.DocumentElement!.LastChild!.AppendChild(wrapper.ImportNode(signed.DocumentElement!, true));
+
+        var ex = Assert.Throws<InvalidOperationException>(() => SamlResponse.Parse(
+            ToBase64(wrapper.OuterXml), MakeProvider(), SpContext(), NullLogger.Instance));
+        Assert.Contains("root", ex.Message, StringComparison.Ordinal);
+    }
+
     // ── Happy path ───────────────────────────────────────────────────────────────────────
 
     [Fact]
